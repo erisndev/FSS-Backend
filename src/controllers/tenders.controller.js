@@ -71,7 +71,10 @@ export const createTender = async (req, res) => {
     const parsedTags = Array.isArray(tags)
       ? tags.map((t) => String(t).trim()).filter(Boolean)
       : typeof tags === "string"
-      ? tags.split(",").map((t) => t.trim()).filter(Boolean)
+      ? tags
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean)
       : [];
 
     const parsedRequirements = Array.isArray(requirements)
@@ -151,8 +154,7 @@ export const updateTender = async (req, res) => {
     const parsedDeadline = deadline ? new Date(deadline) : undefined;
     if (
       deadline &&
-      (!(parsedDeadline instanceof Date) ||
-        isNaN(parsedDeadline.getTime()))
+      (!(parsedDeadline instanceof Date) || isNaN(parsedDeadline.getTime()))
     ) {
       return res.status(400).json({ message: "Invalid deadline date" });
     }
@@ -169,22 +171,23 @@ export const updateTender = async (req, res) => {
       : [];
 
     // Normalize tags and requirements
-    const parsedTags =
-      Array.isArray(tags)
-        ? tags.map((t) => String(t).trim()).filter(Boolean)
-        : typeof tags === "string"
-        ? tags.split(",").map((t) => t.trim()).filter(Boolean)
-        : undefined;
+    const parsedTags = Array.isArray(tags)
+      ? tags.map((t) => String(t).trim()).filter(Boolean)
+      : typeof tags === "string"
+      ? tags
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean)
+      : undefined;
 
-    const parsedRequirements =
-      Array.isArray(requirements)
-        ? requirements.map((r) => String(r).trim()).filter(Boolean)
-        : typeof requirements === "string"
-        ? requirements
-            .split(/\r?\n|,/)
-            .map((r) => r.trim())
-            .filter(Boolean)
-        : undefined;
+    const parsedRequirements = Array.isArray(requirements)
+      ? requirements.map((r) => String(r).trim()).filter(Boolean)
+      : typeof requirements === "string"
+      ? requirements
+          .split(/\r?\n|,/)
+          .map((r) => r.trim())
+          .filter(Boolean)
+      : undefined;
 
     // Build update object dynamically (skip undefined fields)
     const updateData = {

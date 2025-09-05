@@ -1,9 +1,9 @@
+// controllers/applications.controller.js
 import Tender from "../models/Tender.js";
 import Application from "../models/Application.js";
 import path from "path";
 import { fileURLToPath } from "url";
 
-// Helper to create file URL
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
@@ -11,37 +11,71 @@ const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 export const applyToTender = async (req, res) => {
   try {
     const { tenderId } = req.params;
-    const { message } = req.body;
     const tender = await Tender.findById(tenderId);
     if (!tender) return res.status(404).json({ message: "Tender not found" });
     if (new Date(tender.deadline) < new Date())
       return res.status(400).json({ message: "Deadline passed" });
 
-    const files = (req.files || []).map((f) => ({
-      originalName: f.originalname,
-      mimeType: f.mimetype,
-      size: f.size,
-      path: f.path,
-      url: `${BASE_URL}/uploads/${f.filename}`, // accessible URL
-    }));
+    // Log files for debugging
+    console.log("Files received from client:", req.files);
+    console.log("Form data received:", req.body);
+
+    const {
+      bidderName,
+      registrationNumber,
+      bbeeLevel,
+      cidbGrading,
+      contactPerson,
+      email,
+      phone,
+      bidAmount,
+      timeframe,
+      message,
+    } = req.body;
+
+    // Ensure files array exists
+    const files = Array.isArray(req.files)
+      ? req.files.map((f) => ({
+          originalName: f.originalname,
+          mimeType: f.mimetype,
+          size: f.size,
+          path: f.path,
+          url: `${BASE_URL}/uploads/${f.filename}`,
+        }))
+      : [];
 
     const application = await Application.create({
       tender: tenderId,
       bidder: req.user._id,
+      bidderName,
+      registrationNumber,
+      bbeeLevel,
+      cidbGrading,
+      contactPerson,
+      email,
+      phone,
+      bidAmount,
+      timeframe,
       message,
       files,
     });
+
     res.status(201).json(application);
   } catch (e) {
+    console.error("Error applying to tender:", e);
     res.status(500).json({ message: e.message });
   }
 };
 
 export const myApplications = async (req, res) => {
   try {
-    const apps = await Application.find({ bidder: req.user._id }).populate(
-      "tender"
-    );
+    const apps = await Application.find({ bidder: req.user._id }).populate({
+      path: "tender",
+      populate: {
+        path: "createdBy",
+        select: "name email", // only select needed fields
+      },
+    });
     res.json(apps);
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -53,7 +87,7 @@ export const receivedApplications = async (req, res) => {
     const { tenderId } = req.params;
     const apps = await Application.find({ tender: tenderId }).populate(
       "bidder",
-      "name email"
+      "name email bidderName registrationNumber"
     );
     res.json(apps);
   } catch (e) {

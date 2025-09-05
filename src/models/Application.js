@@ -1,3 +1,4 @@
+// models/Application.js
 import mongoose from "mongoose";
 
 const fileSchema = new mongoose.Schema(
@@ -23,6 +24,15 @@ const applicationSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    bidderName: { type: String, required: true },
+    registrationNumber: { type: String },
+    bbeeLevel: { type: String },
+    cidbGrading: { type: String },
+    contactPerson: { type: String, required: true },
+    email: { type: String, required: true },
+    phone: { type: String, required: true },
+    bidAmount: { type: Number, required: true },
+    timeframe: { type: String },
     message: { type: String },
     status: {
       type: String,

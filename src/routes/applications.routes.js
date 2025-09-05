@@ -12,12 +12,11 @@ import {
 
 const router = Router();
 
-// Bidder applies to tender
 router.post(
   "/:tenderId",
   protect,
   authorize("bidder"),
-  upload.array("files", 10),
+  upload.array("documents", 10),
   applyToTender
 );
 
