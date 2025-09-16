@@ -1,4 +1,3 @@
-// models/Application.js
 import mongoose from "mongoose";
 
 const fileSchema = new mongoose.Schema(
@@ -6,8 +5,7 @@ const fileSchema = new mongoose.Schema(
     originalName: String,
     mimeType: String,
     size: Number,
-    path: String,
-    url: String, // frontend download link
+    url: String,
   },
   { _id: false }
 );
@@ -24,7 +22,7 @@ const applicationSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
-    bidderName: { type: String, required: true },
+    companyName: { type: String, required: true },
     registrationNumber: { type: String },
     bbeeLevel: { type: String },
     cidbGrading: { type: String },
@@ -36,10 +34,10 @@ const applicationSchema = new mongoose.Schema(
     message: { type: String },
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected", "withdrawn"],
+      enum: ["pending", "accepted", "rejected", "withdrawn"],
       default: "pending",
     },
-    comment: { type: String }, // optional issuer feedback
+    comment: { type: String },
     files: [fileSchema],
   },
   { timestamps: true }

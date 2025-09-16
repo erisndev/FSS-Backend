@@ -1,27 +1,31 @@
-// controllers/applications.controller.js
-import Tender from "../models/Tender.js";
 import Application from "../models/Application.js";
-import path from "path";
-import { fileURLToPath } from "url";
+import Notification from "../models/Notification.js";
+import Tender from "../models/Tender.js";
+import User from "../models/User.js";
+import {
+  sendApplicationSubmittedEmail,
+  sendApplicationStatusEmail,
+} from "../utils/emails.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
-
+// ------------------- APPLY TO TENDER -------------------
 export const applyToTender = async (req, res) => {
   try {
+    console.log("Files received:", req.files);
+    console.log("Request body:", req.body);
+
     const { tenderId } = req.params;
     const tender = await Tender.findById(tenderId);
+    console.log("Authenticated user:", req.user);
+
     if (!tender) return res.status(404).json({ message: "Tender not found" });
     if (new Date(tender.deadline) < new Date())
-      return res.status(400).json({ message: "Deadline passed" });
+      return res.status(400).json({ message: "Deadline has passed" });
 
-    // Log files for debugging
-    console.log("Files received from client:", req.files);
-    console.log("Form data received:", req.body);
+    if (!req.user) return res.status(401).json({ message: "Unauthorized" });
 
+    // Extract fields from form
     const {
-      bidderName,
+      companyName,
       registrationNumber,
       bbeeLevel,
       cidbGrading,
@@ -33,131 +37,213 @@ export const applyToTender = async (req, res) => {
       message,
     } = req.body;
 
-    // Ensure files array exists
-    const files = Array.isArray(req.files)
-      ? req.files.map((f) => ({
-          originalName: f.originalname,
-          mimeType: f.mimetype,
-          size: f.size,
-          path: f.path,
-          url: `${BASE_URL}/uploads/${f.filename}`,
-        }))
-      : [];
+    // Validate required fields
+    if (!contactPerson || !email || !phone || !bidAmount)
+      return res.status(400).json({ message: "Missing required fields" });
 
+    const bidAmountNumber = Number(bidAmount);
+    if (isNaN(bidAmountNumber))
+      return res.status(400).json({ message: "Bid amount must be a number" });
+
+    // Map uploaded files
+    const files = (req.files || []).map((file) => ({
+      originalName: file.originalname,
+      url: `/uploads/${file.filename}`,
+      size: file.size,
+      mimeType: file.mimetype,
+    }));
+
+    // Create the application
     const application = await Application.create({
       tender: tenderId,
       bidder: req.user._id,
-      bidderName,
-      registrationNumber,
-      bbeeLevel,
-      cidbGrading,
+      companyName: companyName,
+      registrationNumber: registrationNumber,
+      bbeeLevel: bbeeLevel,
+      cidbGrading: cidbGrading || "",
       contactPerson,
       email,
       phone,
-      bidAmount,
+      bidAmount: bidAmountNumber,
       timeframe,
       message,
       files,
     });
+    await Tender.findByIdAndUpdate(application.tender, {
+      $push: { applications: application._id },
+    });
+    await sendApplicationSubmittedEmail(req.user.email, application, tender);
+    // Notification to user
+    await Notification.create({
+      user: req.user._id,
+      type: "application",
+      title: "Application Submitted",
+      body: `You submitted an application for tender "${tender.title}".`,
+      meta: { tenderId, applicationId: application._id },
+    });
+
+    // Notification to tender owner
+    await Notification.create({
+      user: tender.createdBy,
+      type: "application",
+      title: "New Application Received",
+      body: `Your tender "${tender.title}" received a new application.`,
+      meta: { tenderId, applicationId: application._id },
+    });
 
     res.status(201).json(application);
-  } catch (e) {
-    console.error("Error applying to tender:", e);
-    res.status(500).json({ message: e.message });
+  } catch (err) {
+    console.error("Error applying to tender:", err);
+    res.status(500).json({ message: err.message, errors: err.errors || null });
   }
 };
 
+// ------------------- GET MY APPLICATIONS -------------------
 export const myApplications = async (req, res) => {
   try {
-    const apps = await Application.find({ bidder: req.user._id }).populate({
-      path: "tender",
-      populate: {
-        path: "createdBy",
-        select: "name email", // only select needed fields
-      },
-    });
-    res.json(apps);
-  } catch (e) {
-    res.status(500).json({ message: e.message });
+    const applications = await Application.find({
+      bidder: req.user._id,
+    }).populate("tender", "title description deadline");
+    res.json(applications);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message });
   }
 };
 
+// ------------------- GET RECEIVED APPLICATIONS -------------------
 export const receivedApplications = async (req, res) => {
   try {
     const { tenderId } = req.params;
-    const apps = await Application.find({ tender: tenderId }).populate(
-      "bidder",
-      "name email bidderName registrationNumber"
-    );
-    res.json(apps);
-  } catch (e) {
-    res.status(500).json({ message: e.message });
+    if (!tenderId)
+      return res.status(400).json({ message: "Tender ID is required" });
+
+    const tender = await Tender.findById(tenderId);
+    if (!tender) return res.status(404).json({ message: "Tender not found" });
+
+    if (
+      String(tender.createdBy) !== String(req.user._id) &&
+      req.user.role !== "admin"
+    ) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const applications = await Application.find({ tender: tenderId })
+      .populate("bidder", "name email company role")
+      .populate("tender", "title description deadline createdBy");
+
+    res.json(applications);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message });
   }
 };
 
+// ------------------- GET APPLICATION BY ID -------------------
+export const getApplicationById = async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id)
+      .populate("bidder", "name email company role")
+      .populate("tender", "title description deadline createdBy");
+
+    if (!application)
+      return res.status(404).json({ message: "Application not found" });
+
+    if (
+      String(application.bidder._id) !== String(req.user._id) &&
+      String(application.tender.createdBy) !== String(req.user._id) &&
+      req.user.role !== "admin"
+    )
+      return res.status(403).json({ message: "Forbidden" });
+
+    res.json(application);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ------------------- SET APPLICATION STATUS -------------------
 export const setApplicationStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, comment } = req.body; // optional comment
-    const app = await Application.findById(id).populate("tender");
-    if (!app) return res.status(404).json({ message: "Application not found" });
+    const { status, comment } = req.body;
+
+    const application = await Application.findById(id).populate("tender");
+    if (!application)
+      return res.status(404).json({ message: "Application not found" });
 
     if (
-      String(app.tender.createdBy) !== String(req.user._id) &&
+      String(application.tender.createdBy) !== String(req.user._id) &&
       req.user.role !== "admin"
-    ) {
+    )
       return res.status(403).json({ message: "Forbidden" });
-    }
 
-    if (!["pending", "approved", "rejected", "withdrawn"].includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
-    }
+    if (status) application.status = status;
+    if (comment) application.comment = comment;
 
-    app.status = status;
-    if (comment) app.comment = comment;
-    await app.save();
-    res.json(app);
-  } catch (e) {
-    res.status(500).json({ message: e.message });
+    await application.save();
+    // Fetch the user who created the application
+    const applicant = await User.findById(application.bidder);
+    if (applicant) {
+      await sendApplicationStatusEmail(applicant, application);
+    }
+    // Notification to applicant
+    await Notification.create({
+      user: applicant._id,
+      type: "application",
+      title: "Application Status Updated",
+      body: `Your application for tender "${application.tender.title}" is now "${application.status}".`,
+      meta: { tenderId: application.tender._id, applicationId: id },
+    });
+
+    res.json(application);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message });
   }
 };
 
+// ------------------- WITHDRAW APPLICATION -------------------
 export const withdrawApplication = async (req, res) => {
   try {
     const { id } = req.params;
-    const app = await Application.findById(id).populate("tender");
-    if (!app) return res.status(404).json({ message: "Application not found" });
-    if (String(app.bidder) !== String(req.user._id))
-      return res.status(403).json({ message: "Forbidden" });
-    if (new Date(app.tender.deadline) < new Date())
-      return res.status(400).json({ message: "Deadline passed" });
-    app.status = "withdrawn";
-    await app.save();
-    res.json(app);
-  } catch (e) {
-    res.status(500).json({ message: e.message });
-  }
-};
+    const application = await Application.findById(id);
+    if (!application)
+      return res.status(404).json({ message: "Application not found" });
 
-// NEW: get single application
-export const getApplicationById = async (req, res) => {
-  try {
-    const app = await Application.findById(req.params.id)
-      .populate("tender")
-      .populate("bidder", "name email");
-    if (!app) return res.status(404).json({ message: "Application not found" });
-
-    // Access control
     if (
-      String(app.bidder._id) !== String(req.user._id) &&
-      String(app.tender.createdBy) !== String(req.user._id) &&
+      String(application.bidder) !== String(req.user._id) &&
       req.user.role !== "admin"
     ) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    res.json(app);
-  } catch (e) {
-    res.status(500).json({ message: e.message });
+    await application.deleteOne();
+    await Notification.create({
+      user: req.user._id,
+      type: "application",
+      title: "Application Withdrawn",
+      body: `You withdrew your application for tender "${application.tender}".`,
+      meta: { applicationId: application._id },
+    });
+    res.json({ message: "Application withdrawn successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ------------------- GET ALL APPLICATIONS -------------------
+export const getAllApplications = async (req, res) => {
+  try {
+    const applications = await Application.find()
+      .populate("bidder", "name email company role")
+      .populate("tender", "title description deadline createdBy");
+
+    res.json(applications);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message });
   }
 };

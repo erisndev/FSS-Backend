@@ -1,6 +1,5 @@
 import { Router } from "express";
-import { protect, authorize } from "../middleware/auth.js";
-import { upload } from "../middleware/upload.js";
+import { protect, authorize, upload } from "../middleware/upload.js";
 import {
   applyToTender,
   myApplications,
@@ -8,51 +7,45 @@ import {
   setApplicationStatus,
   withdrawApplication,
   getApplicationById,
+  getAllApplications,
 } from "../controllers/applications.controller.js";
 
 const router = Router();
 
+// Apply to tender (bidder) with files
 router.post(
   "/:tenderId",
   protect,
   authorize("bidder"),
-  upload.array("documents", 10),
+  upload.array("files"), // <-- multiple files
   applyToTender
 );
 
-// Bidder view own applications
 router.get("/my", protect, authorize("bidder"), myApplications);
-
-// Issuer/Admin view received applications for a tender
 router.get(
   "/received/:tenderId",
   protect,
   authorize("issuer", "admin"),
   receivedApplications
 );
-
-// Update application status (issuer/admin)
 router.put(
   "/:id/status",
   protect,
   authorize("issuer", "admin"),
   setApplicationStatus
 );
-
-// Withdraw application (bidder/admin)
 router.delete(
   "/:id",
   protect,
   authorize("bidder", "admin"),
   withdrawApplication
 );
-
-// Get single application (bidder, issuer of tender, admin)
 router.get(
   "/:id",
   protect,
   authorize("bidder", "issuer", "admin"),
   getApplicationById
 );
+router.get("/", protect, authorize("admin"), getAllApplications);
 
 export default router;
