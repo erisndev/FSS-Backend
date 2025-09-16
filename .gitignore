@@ -1,4 +1,6 @@
 node_modules
 .env
 
-tender-share-system-be6caa8e451c.json
+createAdmin.js
+
+.vscode
