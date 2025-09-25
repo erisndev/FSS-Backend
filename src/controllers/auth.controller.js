@@ -43,6 +43,14 @@ export const register = async (req, res) => {
       title: "Welcome to the platform",
       body: `User ${user.name} registered successfully.`,
     });
+    // Notify all admins
+    const admins = await User.find({ role: "admin" });
+    const adminNotifications = admins.map((admin) => ({
+      user: admin._id,
+      type: "system",
+      title: "New User Registered",
+      body: `User ${user.name} has registered on the platform.`,
+    }));
     // ✅ Pass full user object here
     await sendRegisterOTPEmail(user, otp);
 

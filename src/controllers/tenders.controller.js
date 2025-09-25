@@ -1,13 +1,12 @@
 import Notification from "../models/Notification.js";
 import Tender from "../models/Tender.js";
+import Application from "../models/Application.js";
 import { sendTenderNotificationEmail } from "../utils/emails.js";
+import { autoCloseTenders } from "../utils/tenderUtils.js";
 
 // ------------------- CREATE TENDER -------------------
 export const createTender = async (req, res) => {
   try {
-    console.log("BODY:", req.body);
-    console.log("FILES:", req.files);
-
     const {
       title,
       description,
@@ -27,10 +26,7 @@ export const createTender = async (req, res) => {
       contactPhone,
       status,
     } = req.body;
-    console.log("BODY:", req.body);
-    console.log("FILES:", req.files);
 
-    // ✅ Required fields
     if (
       !title ||
       !description ||
@@ -42,14 +38,6 @@ export const createTender = async (req, res) => {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    // ✅ Budget check
-    if (budgetMin && budgetMax && Number(budgetMin) > Number(budgetMax)) {
-      return res
-        .status(400)
-        .json({ message: "budgetMin cannot be greater than budgetMax" });
-    }
-
-    // ✅ Parse tags
     let tagsArray = [];
     if (tags) {
       if (typeof tags === "string") {
@@ -61,7 +49,6 @@ export const createTender = async (req, res) => {
       } else if (Array.isArray(tags)) tagsArray = tags;
     }
 
-    // ✅ Parse requirements
     let requirementsArray = [];
     if (requirements) {
       if (typeof requirements === "string") {
@@ -73,17 +60,13 @@ export const createTender = async (req, res) => {
       } else if (Array.isArray(requirements)) requirementsArray = requirements;
     }
 
-    // ✅ Handle uploaded files
     const documentArray = (req.files || []).map((file) => ({
       name: file.originalname,
-      url: `/uploads/${file.filename}`, // store relative URL
+      url: `/uploads/${file.filename}`,
       size: file.size,
       type: file.mimetype,
     }));
 
-    console.log("Documents array prepared:", documentArray);
-
-    // ✅ Create tender
     const tender = await Tender.create({
       title,
       description,
@@ -107,8 +90,6 @@ export const createTender = async (req, res) => {
       verificationCode: Math.random().toString(36).slice(2, 8).toUpperCase(),
     });
 
-    console.log("Tender created successfully:", tender._id);
-
     await sendTenderNotificationEmail(req.user.email, tender, "created");
     await Notification.create({
       user: req.user._id,
@@ -127,37 +108,19 @@ export const createTender = async (req, res) => {
 
 // ------------------- UPDATE TENDER -------------------
 export const updateTender = async (req, res) => {
-  console.log("=== UPDATE TENDER START ===");
-
   try {
     const { id } = req.params;
-    console.log("Tender ID:", id);
-
-    // 1️⃣ Find the tender
     const tender = await Tender.findById(id);
-    if (!tender) {
-      console.log("Tender not found");
-      return res.status(404).json({ message: "Tender not found" });
-    }
+    if (!tender) return res.status(404).json({ message: "Tender not found" });
 
-    // 2️⃣ Check ownership
     if (
       String(tender.createdBy) !== String(req.user._id) &&
       req.user.role !== "admin"
     ) {
-      console.log("Forbidden access");
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    console.log(
-      "Tender found, documents count:",
-      tender.documents?.length || 0
-    );
-    console.log("Request body keys:", Object.keys(req.body));
-    console.log("Files received:", req.files?.length || 0);
-
-    // ---------------- Update fields ----------------
-    const updateFields = [
+    const fieldsToUpdate = [
       "title",
       "description",
       "category",
@@ -175,97 +138,57 @@ export const updateTender = async (req, res) => {
       "contactPhone",
     ];
 
-    updateFields.forEach((field) => {
-      if (req.body[field] !== undefined && req.body[field] !== "") {
-        try {
-          if (field === "budgetMin" || field === "budgetMax") {
-            const numValue = Number(req.body[field]);
-            if (!isNaN(numValue)) tender[field] = numValue;
-            else console.log(`Invalid number for ${field}:`, req.body[field]);
-          } else if (field === "isUrgent") {
-            tender[field] =
-              req.body[field] === "true" || req.body[field] === true;
-          } else if (field === "deadline") {
-            const dateValue = new Date(req.body[field]);
-            if (!isNaN(dateValue.getTime())) tender[field] = dateValue;
-            else console.log("Invalid deadline:", req.body[field]);
-          } else {
-            tender[field] = req.body[field];
-          }
-        } catch (e) {
-          console.error(`Error updating ${field}:`, e);
-        }
+    fieldsToUpdate.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        if (field === "budgetMin" || field === "budgetMax")
+          tender[field] = Number(req.body[field]);
+        else if (field === "deadline")
+          tender[field] = new Date(req.body[field]);
+        else if (field === "isUrgent") tender[field] = !!req.body[field];
+        else tender[field] = req.body[field];
       }
     });
 
-    // ---------------- Tags & Requirements ----------------
-    const parseArrayField = (fieldName) => {
-      const raw = req.body[fieldName];
+    // Tags & requirements
+    const parseArray = (raw) => {
       if (!raw) return [];
       if (Array.isArray(raw)) return raw;
       if (typeof raw === "string") {
         try {
-          const parsed = JSON.parse(raw);
-          return Array.isArray(parsed)
-            ? parsed
-            : raw.split(",").map((t) => t.trim());
+          return JSON.parse(raw);
         } catch {
           return raw.split(",").map((t) => t.trim());
         }
       }
       return [];
     };
+    tender.tags = parseArray(req.body.tags);
+    tender.requirements = parseArray(req.body.requirements);
 
-    tender.tags = parseArrayField("tags");
-    tender.requirements = parseArrayField("requirements");
-
-    console.log("Tags:", tender.tags);
-    console.log("Requirements:", tender.requirements);
-
-    // ---------------- Documents ----------------
-    let existingDocs = [];
-    let newDocs = [];
-
-    if (req.body.existingDocuments) {
-      try {
-        const existingDocUrls =
-          typeof req.body.existingDocuments === "string"
-            ? JSON.parse(req.body.existingDocuments)
-            : req.body.existingDocuments;
-
-        if (Array.isArray(existingDocUrls)) {
-          existingDocs = existingDocUrls.map((url) => {
-            const doc = tender.documents.find((d) => d.url === url);
-            return (
-              doc || {
-                name: url.split("/").pop() || "Unknown",
-                url,
-                size: 0,
-                type: "application/octet-stream",
-              }
-            );
-          });
-        }
-      } catch (e) {
-        console.error("Error parsing existingDocuments:", e);
-      }
-    }
-
-    if (req.files && req.files.length > 0) {
-      newDocs = req.files.map((file) => ({
-        name: file.originalname,
-        url: `/uploads/${file.filename}`,
-        size: file.size,
-        type: file.mimetype,
-      }));
-    }
-
+    // Documents
+    const existingDocs = req.body.existingDocuments
+      ? (typeof req.body.existingDocuments === "string"
+          ? JSON.parse(req.body.existingDocuments)
+          : req.body.existingDocuments
+        ).map(
+          (url) =>
+            tender.documents.find((d) => d.url === url) || {
+              name: url.split("/").pop(),
+              url,
+              size: 0,
+              type: "application/octet-stream",
+            }
+        )
+      : [];
+    const newDocs = (req.files || []).map((f) => ({
+      name: f.originalname,
+      url: `/uploads/${f.filename}`,
+      size: f.size,
+      type: f.mimetype,
+    }));
     tender.documents = [...existingDocs, ...newDocs];
-    console.log("Documents count after update:", tender.documents.length);
 
-    // ---------------- Save Tender ----------------
     const updatedTender = await tender.save();
-    console.log("Tender saved successfully");
 
     await sendTenderNotificationEmail(req.user.email, tender, "updated");
     await Notification.create({
@@ -276,24 +199,10 @@ export const updateTender = async (req, res) => {
       meta: { tenderId: tender._id },
     });
 
-    res.status(200).json({
-      message: "Tender updated successfully",
-      tender: updatedTender,
-      debug: {
-        originalDocs: tender.documents.length,
-        existingDocsKept: existingDocs.length,
-        newDocsAdded: newDocs.length,
-      },
-    });
+    res.json({ message: "Tender updated successfully", tender: updatedTender });
   } catch (err) {
-    console.error("=== UPDATE TENDER ERROR ===");
-    console.error(err);
-    const status = err.name === "ValidationError" ? 400 : 500;
-    res.status(status).json({
-      message: err.message,
-      name: err.name,
-      stack: process.env.NODE_ENV !== "production" ? err.stack : undefined,
-    });
+    console.error("Update tender error:", err);
+    res.status(500).json({ message: err.message });
   }
 };
 
@@ -307,119 +216,103 @@ export const deleteTender = async (req, res) => {
     if (
       String(tender.createdBy) !== String(req.user._id) &&
       req.user.role !== "admin"
-    )
+    ) {
       return res.status(403).json({ message: "Forbidden" });
+    }
 
+    await Application.deleteMany({ tender: tender._id });
     await tender.deleteOne();
+
     await sendTenderNotificationEmail(req.user.email, tender, "deleted");
     await Notification.create({
       user: req.user._id,
       type: "tender",
       title: "Tender Deleted",
-      body: `Tender "${tender.title}" was deleted.`,
+      body: `Tender "${tender.title}" was deleted, along with its applications.`,
       meta: { tenderId: tender._id },
     });
 
     res.json({ message: "Tender deleted successfully" });
   } catch (err) {
-    console.error("Error deleting tender:", err);
+    console.error(err);
     res.status(500).json({ message: err.message });
   }
 };
 
-// ------------------- LIST & GET TENDERS -------------------
+// ------------------- LIST TENDERS -------------------
 export const listTenders = async (req, res) => {
   try {
+    await autoCloseTenders(); // ✅ Auto-close expired tenders
+
     const { status, category, search, page = 1, limit = 20 } = req.query;
     const query = {};
-
     if (status) query.status = status;
     if (category) query.category = category;
-    if (search) {
+    if (search)
       query.$or = [
         { title: { $regex: search, $options: "i" } },
         { description: { $regex: search, $options: "i" } },
       ];
-    }
 
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-    const skip = (pageNum - 1) * limitNum;
-
-    const result = await Tender.find(query)
+    const pageNum = parseInt(page),
+      limitNum = parseInt(limit),
+      skip = (pageNum - 1) * limitNum;
+    const tenders = await Tender.find(query)
       .populate("createdBy", "name email")
-      .populate("applications")
       .sort("-createdAt")
       .skip(skip)
       .limit(limitNum);
-
     const total = await Tender.countDocuments(query);
 
     res.json({
-      tenders: result,
+      tenders,
       pagination: {
         current: pageNum,
         total: Math.ceil(total / limitNum),
-        count: result.length,
+        count: tenders.length,
         totalDocuments: total,
       },
     });
   } catch (err) {
-    console.error("Error listing tenders:", err);
+    console.error(err);
     res.status(500).json({ message: err.message });
   }
 };
 
+// ------------------- GET SINGLE TENDER -------------------
 export const getTender = async (req, res) => {
   try {
+    await autoCloseTenders(); // ✅ Auto-close expired tenders
+
     const { id } = req.params;
-    console.log("Getting tender with ID:", id);
-
-    // Check if ID is provided and valid
-    if (!id || id === "undefined" || id === "null") {
-      return res.status(400).json({ message: "Invalid or missing tender ID" });
-    }
-
-    // Validate ObjectId format
-    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
-      return res.status(400).json({ message: "Invalid tender ID format" });
-    }
+    if (!id.match(/^[0-9a-fA-F]{24}$/))
+      return res.status(400).json({ message: "Invalid tender ID" });
 
     const tender = await Tender.findById(id)
       .populate("createdBy", "name email")
       .populate({
         path: "applications",
-        populate: { path: "bidder", select: "name email companyName" }, // get bidder details too
+        populate: { path: "bidder", select: "name email companyName" },
       });
 
-    if (!tender) {
-      return res.status(404).json({ message: "Tender not found" });
-    }
-
+    if (!tender) return res.status(404).json({ message: "Tender not found" });
     res.json(tender);
   } catch (err) {
-    console.error("Error getting tender:", err);
-
-    let status = 500;
-    let message = err.message;
-
-    if (err.name === "CastError") {
-      status = 400;
-      message = "Invalid tender ID format";
-    }
-
-    res.status(status).json({ message });
+    console.error(err);
+    res.status(500).json({ message: err.message });
   }
 };
 
+// ------------------- GET MY TENDERS -------------------
 export const getMyTenders = async (req, res) => {
   try {
+    await autoCloseTenders(); // ✅ Auto-close expired tenders
     const tenders = await Tender.find({ createdBy: req.user._id }).sort(
       "-createdAt"
     );
     res.json(tenders);
   } catch (err) {
-    console.error("Error in getMyTenders:", err);
+    console.error(err);
     res.status(500).json({ message: err.message });
   }
 };
