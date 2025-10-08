@@ -7,12 +7,14 @@ import {
   getTender,
   deleteTender,
   getMyTenders,
+  checkTenderVerification,
 } from "../controllers/tenders.controller.js";
 
 const router = express.Router();
 
 router.get("/", listTenders);
 router.get("/my", protect, authorize("issuer", "admin"), getMyTenders);
+router.get("/:id/check-verification", checkTenderVerification);
 router.get("/:id", getTender);
 
 router.post(

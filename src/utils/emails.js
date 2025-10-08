@@ -306,4 +306,65 @@ export const sendTenderDeadlineReminder = async (tender) => {
   });
 };
 
+// ------------------- Verification Code Email -------------------
+export const sendVerificationCodeEmail = async (user, tenderTitle, verificationCode) => {
+  await sendEmail({
+    to: user.email,
+    subject: `Verification Code for Tender Application: "${tenderTitle}"`,
+    html: templateWrapper(
+      "Tender Application Verification Code",
+      `<p style="margin: 0 0 20px 0;">Dear ${user.name},</p>
+       <p style="margin: 0 0 20px 0;">Your request for a verification code has been approved. You can now use the code below to proceed with your tender application.</p>
+       <div style="background-color: #f0fdf4; border: 2px solid #22c55e; border-radius: 6px; padding: 25px; margin: 25px 0; text-align: center;">
+         <h3 style="margin: 0 0 15px 0; color: #16a34a;">Your Verification Code</h3>
+         <h2 style="margin: 0; color: #16a34a; font-size: 36px; font-weight: bold; letter-spacing: 5px;">${verificationCode}</h2>
+       </div>
+       <div style="background-color: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 20px; margin: 25px 0;">
+         <h4 style="margin: 0 0 10px 0; color: #0369a1;">How to use this code:</h4>
+         <ol style="margin: 0; padding-left: 20px;">
+           <li style="margin-bottom: 8px;">Navigate to the tender application page for "${tenderTitle}"</li>
+           <li style="margin-bottom: 8px;">Click on "Apply to Tender"</li>
+           <li style="margin-bottom: 8px;">Enter this verification code when prompted</li>
+           <li style="margin-bottom: 8px;">Complete your application form</li>
+         </ol>
+       </div>
+       <p style="margin: 0 0 20px 0;"><strong>Important:</strong> This verification code is unique to this tender and can only be used once. Please keep it confidential and do not share it with others.</p>
+       <p style="margin: 0 0 20px 0;">If you did not request this verification code, please contact our support team immediately.</p>
+       <p style="margin: 0;">Best regards,<br>The Tender Management Team</p>`
+    ),
+  });
+};
+
+// ------------------- Verification Code Request Notification Email -------------------
+export const sendVerificationCodeRequestEmail = async (tenderCreator, tender, requester, message) => {
+  await sendEmail({
+    to: tenderCreator.email,
+    subject: `New Verification Code Request for Tender: "${tender.title}"`,
+    html: templateWrapper(
+      "Verification Code Request Received",
+      `<p style="margin: 0 0 20px 0;">Dear ${tenderCreator.name},</p>
+       <p style="margin: 0 0 20px 0;">A bidder has requested a verification code to apply for your tender. Please review the request details below:</p>
+       <div style="background-color: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 20px; margin: 25px 0;">
+         <h3 style="margin: 0 0 15px 0; color: #0369a1;">Request Details</h3>
+         <p style="margin: 0 0 10px 0;"><strong>Tender:</strong> ${tender.title}</p>
+         <p style="margin: 0 0 10px 0;"><strong>Requester Name:</strong> ${requester.name}</p>
+         <p style="margin: 0 0 10px 0;"><strong>Requester Email:</strong> ${requester.email}</p>
+         ${requester.company ? `<p style="margin: 0 0 10px 0;"><strong>Company:</strong> ${requester.company}</p>` : ''}
+         ${requester.phone ? `<p style="margin: 0 0 10px 0;"><strong>Phone:</strong> ${requester.phone}</p>` : ''}
+         ${message ? `
+         <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 15px; margin-top: 15px;">
+           <p style="margin: 0 0 5px 0;"><strong>Message from Requester:</strong></p>
+           <p style="margin: 0; font-style: italic;">${message}</p>
+         </div>` : ''}
+       </div>
+       <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; padding: 20px; margin: 25px 0;">
+         <h4 style="margin: 0 0 10px 0; color: #d97706;">Action Required</h4>
+         <p style="margin: 0;">Please log in to your dashboard to review and approve or reject this verification code request. The bidder will not be able to apply for your tender until you approve their request.</p>
+       </div>
+       <p style="margin: 0 0 20px 0;">You can manage all verification code requests from your dashboard under the "Verification Requests" section.</p>
+       <p style="margin: 0;">Best regards,<br>The Tender Management Team</p>`
+    ),
+  });
+};
+
 export default sendEmail;

@@ -14,18 +14,18 @@ import tenderRoutes from "./routes/tenders.routes.js";
 import applicationRoutes from "./routes/applications.routes.js";
 import notificationRoutes from "./routes/notifications.routes.js";
 import issuerRoutes from "./routes/issuer.routes.js";
-import fileRoutes from "./routes/files.routes.js";
+import verificationCodeRoutes from "./routes/verificationCode.routes.js";
 
 import { notFound, errorHandler } from "./middleware/error.js";
 
 const app = express();
 connectDB();
 
-// Security & utilities
+// ---------------- Security & Utilities ----------------
 app.use(helmet());
 app.use(
   cors({
-    origin: "http://localhost:5173", // your frontend
+    origin: "http://localhost:5173", // frontend URL
     credentials: true,
   })
 );
@@ -36,25 +36,25 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
 
-// Rate limiter
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 });
+// ---------------- Rate Limiter ----------------
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000,
+});
 app.use(limiter);
 
-// Static files (optional)
-app.use("/uploads", express.static("uploads"));
-
-// API routes
+// ---------------- API Routes ----------------
 app.use("/api/auth", authRoutes);
 app.use("/api/tenders", tenderRoutes);
 app.use("/api/applications", applicationRoutes);
 app.use("/api/notifications", notificationRoutes);
-app.use("/api/files", fileRoutes);
 app.use("/api/issuer", issuerRoutes);
+app.use("/api/verification-code", verificationCodeRoutes);
 
-// Health check
+// ---------------- Health Check ----------------
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// Error handlers
+// ---------------- Error Handlers ----------------
 app.use(notFound);
 app.use(errorHandler);
 

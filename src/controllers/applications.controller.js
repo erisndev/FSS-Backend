@@ -1,7 +1,9 @@
+import { uploadToSupabase } from "../middleware/upload.js";
 import Application from "../models/Application.js";
 import Notification from "../models/Notification.js";
 import Tender from "../models/Tender.js";
 import User from "../models/User.js";
+import VerificationCodeRequest from "../models/VerificationCodeRequest.js";
 import {
   sendApplicationSubmittedEmail,
   sendApplicationStatusEmail,
@@ -34,7 +36,23 @@ export const applyToTender = async (req, res) => {
     if (new Date(tender.deadline) < new Date())
       return res.status(400).json({ message: "Deadline has passed" });
 
-    if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+    // Check if tender requires verification code
+    if (tender.verificationCode) {
+      // Check if user has a verified code request for this tender
+      const verifiedRequest = await VerificationCodeRequest.findOne({
+        tender: tenderId,
+        requestedBy: req.user._id,
+        status: "approved",
+        codeUsed: true,
+      });
+
+      if (!verifiedRequest) {
+        return res.status(403).json({ 
+          message: "Verification code required. Please request and verify the code before applying.",
+          requiresVerification: true 
+        });
+      }
+    }
 
     // Extract fields from form
     const {
@@ -58,13 +76,24 @@ export const applyToTender = async (req, res) => {
     if (isNaN(bidAmountNumber))
       return res.status(400).json({ message: "Bid amount must be a number" });
 
-    // Map uploaded files
-    const files = (req.files || []).map((file) => ({
-      originalName: file.originalname,
-      url: `/uploads/${file.filename}`,
-      size: file.size,
-      mimeType: file.mimetype,
-    }));
+    // Upload application files to Supabase under tender/company folder
+    let files = [];
+    if (req.files && req.files.length > 0) {
+      files = await Promise.all(
+        req.files.map(async (file) => {
+          const url = await uploadToSupabase(
+            file,
+            `${tender.title}/Applications/${companyName}` // folder: uploads/<tenderName>/<companyName>/
+          );
+          return {
+            originalName: file.originalname,
+            url,
+            size: file.size,
+            mimeType: file.mimetype,
+          };
+        })
+      );
+    }
 
     // Create the application
     const application = await Application.create({

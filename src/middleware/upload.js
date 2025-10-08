@@ -1,18 +1,50 @@
+// backend/middleware/upload.js
 import multer from "multer";
+import { createClient } from "@supabase/supabase-js";
 import path from "path";
 
-// Configure multer to save files to /uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${file.fieldname}-${Date.now()}${ext}`);
-  },
-});
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
+// Use memory storage
+const storage = multer.memoryStorage();
 export const upload = multer({ storage });
+
+// Function to upload a file buffer to Supabase Storage
+export const uploadToSupabase = async (file, tenderName = "general") => {
+  console.log(
+    "[uploadToSupabase] Starting upload for file:",
+    file.originalname,
+    "under tender:",
+    tenderName
+  );
+  const fileExt = path.extname(file.originalname);
+  const fileName = `${Date.now()}-${file.originalname}`;
+
+  const { data, error } = await supabase.storage
+    .from("tenderDocs")
+    .upload(`uploads/${tenderName}/${fileName}`, file.buffer, {
+      contentType: file.mimetype,
+      upsert: false,
+    });
+
+  if (error) {
+    console.error("[uploadToSupabase] Upload error:", error.message);
+    throw new Error(error.message);
+  }
+
+  const { data: publicUrl } = supabase.storage
+    .from("tenderDocs")
+    .getPublicUrl(data.path);
+
+  console.log(
+    "[uploadToSupabase] Upload successful. Public URL:",
+    publicUrl.publicUrl
+  );
+  return publicUrl.publicUrl;
+};
 
 // Protect & authorize middleware
 import jwt from "jsonwebtoken";
