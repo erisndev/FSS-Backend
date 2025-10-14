@@ -2,7 +2,10 @@ import VerificationCodeRequest from "../models/VerificationCodeRequest.js";
 import Tender from "../models/Tender.js";
 import User from "../models/User.js";
 import Notification from "../models/Notification.js";
-import { sendVerificationCodeEmail, sendVerificationCodeRequestEmail } from "../utils/emails.js";
+import {
+  sendVerificationCodeEmail,
+  sendVerificationCodeRequestEmail,
+} from "../utils/emails.js";
 import crypto from "crypto";
 
 // ------------------- REQUEST VERIFICATION CODE -------------------
@@ -25,7 +28,7 @@ export const requestVerificationCode = async (req, res) => {
 
     // Import Application model to check if user has already applied
     const Application = (await import("../models/Application.js")).default;
-    
+
     // Check if user has already applied to this tender
     const existingApplication = await Application.findOne({
       tender: tenderId,
@@ -152,15 +155,21 @@ export const getVerificationCodeRequests = async (req, res) => {
     }
 
     const requests = await VerificationCodeRequest.find(query)
-      .populate(
-        "tender",
-        "title description companyName category budgetMin budgetMax deadline status"
-      )
-      .populate("requestedBy", "name email company phone")
-      .populate("approvedBy", "name email")
-
+      .populate({
+        path: "tender",
+        select: "title description companyName category budgetMin budgetMax deadline status"
+      })
+      .populate({
+        path: "requestedBy",
+        select: "name email company phone role description"
+      })
+      .populate({
+        path: "approvedBy",
+        select: "name email company"
+      })
       .sort({ createdAt: -1 });
 
+    console.log("Sample request with populated data:", JSON.stringify(requests[0], null, 2));
     res.json(requests);
   } catch (err) {
     console.error("Error fetching verification code requests:", err);
@@ -175,7 +184,10 @@ export const approveVerificationCodeRequest = async (req, res) => {
 
     const request = await VerificationCodeRequest.findById(requestId)
       .populate("tender")
-      .populate("requestedBy", "name email");
+      .populate({
+        path: "requestedBy",
+        select: "name email company phone role"
+      });
 
     if (!request) {
       return res.status(404).json({ message: "Request not found" });
@@ -250,7 +262,10 @@ export const rejectVerificationCodeRequest = async (req, res) => {
 
     const request = await VerificationCodeRequest.findById(requestId)
       .populate("tender", "title createdBy")
-      .populate("requestedBy", "name email");
+      .populate({
+        path: "requestedBy",
+        select: "name email company phone role"
+      });
 
     if (!request) {
       return res.status(404).json({ message: "Request not found" });
@@ -328,7 +343,7 @@ export const verifyCode = async (req, res) => {
 
     // Import Application model to check if user has already applied
     const Application = (await import("../models/Application.js")).default;
-    
+
     // Check if user has already applied to this tender
     const existingApplication = await Application.findOne({
       tender: tenderId,
@@ -387,7 +402,22 @@ export const getMyVerificationCodeRequests = async (req, res) => {
       .populate("approvedBy", "name")
       .sort({ createdAt: -1 });
 
-    res.json(requests);
+    // Filter out requests where tender has been deleted (tender is null)
+    // and add a flag for deleted tenders
+    const processedRequests = requests.map((request) => {
+      const requestObj = request.toObject();
+      if (!requestObj.tender) {
+        requestObj.tenderDeleted = true;
+        requestObj.tender = {
+          title: "Tender Deleted",
+          description: "This tender has been removed",
+          status: "deleted",
+        };
+      }
+      return requestObj;
+    });
+
+    res.json(processedRequests);
   } catch (err) {
     console.error("Error fetching user verification code requests:", err);
     res.status(500).json({ message: err.message });
@@ -401,7 +431,7 @@ export const checkVerificationStatus = async (req, res) => {
 
     // Import Application model to check if user has already applied
     const Application = (await import("../models/Application.js")).default;
-    
+
     // Check if user has already applied to this tender
     const existingApplication = await Application.findOne({
       tender: tenderId,
@@ -429,7 +459,8 @@ export const checkVerificationStatus = async (req, res) => {
       return res.json({
         isVerified: true,
         hasApplied: false,
-        message: "Code already verified. You can proceed with your application.",
+        message:
+          "Code already verified. You can proceed with your application.",
       });
     }
 

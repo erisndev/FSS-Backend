@@ -14,7 +14,6 @@ const userSchema = new mongoose.Schema(
       default: "bidder",
     },
     company: { type: String },
-    description: { type: String },
     isActive: { type: Boolean, default: true },
     lastLogin: { type: Date, default: null },
     resetPasswordToken: String,
