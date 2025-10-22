@@ -1,11 +1,13 @@
 import VerificationCodeRequest from "../models/VerificationCodeRequest.js";
 import Tender from "../models/Tender.js";
 import User from "../models/User.js";
+import TeamMember from "../models/TeamMember.js";
 import Notification from "../models/Notification.js";
 import {
   sendVerificationCodeEmail,
   sendVerificationCodeRequestEmail,
 } from "../utils/emails.js";
+import { logActivity } from "../utils/activityLogger.js";
 import crypto from "crypto";
 
 // ------------------- REQUEST VERIFICATION CODE -------------------
@@ -17,7 +19,7 @@ export const requestVerificationCode = async (req, res) => {
     // Check if tender exists and is active
     const tender = await Tender.findById(tenderId).populate(
       "createdBy",
-      "name email"
+      "name email companyName"
     );
     if (!tender) {
       return res.status(404).json({ message: "Tender not found" });
@@ -100,7 +102,7 @@ export const requestVerificationCode = async (req, res) => {
       user: tender.createdBy._id,
       type: "tender",
       title: "Verification Code Request",
-      body: `${req.user.name} has requested a verification code for tender "${tender.title}"`,
+      body: `${req.user.name} from ${req.user.companyName} has requested a verification code for tender "${tender.title}"`,
       meta: {
         tenderId,
         requestId: codeRequest._id,
@@ -115,12 +117,30 @@ export const requestVerificationCode = async (req, res) => {
         user: admin._id,
         type: "tender",
         title: "Verification Code Request",
-        body: `${req.user.name} has requested a verification code for tender "${tender.title}"`,
+        body: `${req.user.name}from ${req.user.companyName} has requested a verification code for tender "${tender.title}"`,
         meta: {
           tenderId,
           requestId: codeRequest._id,
           requestType: "verificationCode",
         },
+      });
+    }
+
+    // Log activity if tender belongs to an organization
+    if (tender.organization) {
+      await logActivity({
+        organizationId: tender.organization,
+        userId: req.user._id,
+        action: "request_verification_code",
+        targetType: "verification_request",
+        targetId: codeRequest._id,
+        details: {
+          tenderId: tender._id,
+          tenderTitle: tender.title,
+          requestedBy: req.user.email,
+          message: message || "No message provided",
+        },
+        req,
       });
     }
 
@@ -134,21 +154,36 @@ export const requestVerificationCode = async (req, res) => {
   }
 };
 
-// ------------------- GET VERIFICATION CODE REQUESTS (FOR ADMIN/ISSUER) -------------------
+// Get verification code requests (for admin/issuer/team members)
 export const getVerificationCodeRequests = async (req, res) => {
   try {
     const { status } = req.query;
     let query = {};
 
-    // If user is issuer, only show requests for their tenders
-    if (req.user.role === "issuer") {
-      const userTenders = await Tender.find({ createdBy: req.user._id }).select(
-        "_id"
-      );
+    // Admin can see all requests
+    if (req.user.role === "admin") {
+      // No filter - see all requests
+    }
+    // If user belongs to an organization (team member)
+    else if (req.user.organizationId) {
+      // Get all tenders from the organization
+      const orgTenders = await Tender.find({
+        organization: req.user.organizationId,
+      }).select("_id");
+
+      const tenderIds = orgTenders.map((t) => t._id);
+      query.tender = { $in: tenderIds };
+    }
+    // Individual issuer (not part of organization)
+    else if (req.user.role === "issuer") {
+      // Only show requests for their own tenders
+      const userTenders = await Tender.find({
+        createdBy: req.user._id,
+      }).select("_id");
+
       const tenderIds = userTenders.map((t) => t._id);
       query.tender = { $in: tenderIds };
     }
-    // Admins can see all requests
 
     if (status) {
       query.status = status;
@@ -157,19 +192,23 @@ export const getVerificationCodeRequests = async (req, res) => {
     const requests = await VerificationCodeRequest.find(query)
       .populate({
         path: "tender",
-        select: "title description companyName category budgetMin budgetMax deadline status"
+        select:
+          "title description companyName category budgetMin budgetMax deadline status organization createdBy",
       })
       .populate({
         path: "requestedBy",
-        select: "name email company phone role description"
+        select: "name email company phone role description",
       })
       .populate({
         path: "approvedBy",
-        select: "name email company"
+        select: "name email company",
       })
       .sort({ createdAt: -1 });
 
-    console.log("Sample request with populated data:", JSON.stringify(requests[0], null, 2));
+    console.log(
+      "Sample request with populated data:",
+      JSON.stringify(requests[0], null, 2)
+    );
     res.json(requests);
   } catch (err) {
     console.error("Error fetching verification code requests:", err);
@@ -177,7 +216,7 @@ export const getVerificationCodeRequests = async (req, res) => {
   }
 };
 
-// ------------------- APPROVE VERIFICATION CODE REQUEST -------------------
+// Approve verification code request
 export const approveVerificationCodeRequest = async (req, res) => {
   try {
     const { requestId } = req.params;
@@ -186,7 +225,7 @@ export const approveVerificationCodeRequest = async (req, res) => {
       .populate("tender")
       .populate({
         path: "requestedBy",
-        select: "name email company phone role"
+        select: "name email company phone role",
       });
 
     if (!request) {
@@ -201,13 +240,57 @@ export const approveVerificationCodeRequest = async (req, res) => {
 
     // Check authorization
     const tender = await Tender.findById(request.tender._id);
-    if (
-      req.user.role !== "admin" &&
-      String(tender.createdBy) !== String(req.user._id)
-    ) {
-      return res
-        .status(403)
-        .json({ message: "Not authorized to approve this request" });
+    const isAdmin = req.user.role === "admin";
+    const isCreator = String(tender.createdBy) === String(req.user._id);
+    const sameOrganization =
+      req.user.organizationId &&
+      tender.organization &&
+      String(tender.organization) === String(req.user.organizationId);
+
+    // Admin can always approve
+    if (isAdmin) {
+      // Continue to approval logic
+    }
+    // If user belongs to an organization (team member)
+    else if (req.user.organizationId) {
+      // Check if tender belongs to same organization
+      if (!sameOrganization) {
+        return res.status(403).json({
+          message:
+            "Forbidden: You don't have permission to manage verification requests",
+        });
+      }
+
+      // Get team member permissions
+      const teamMember = await TeamMember.findOne({
+        organization: req.user.organizationId,
+        user: req.user._id,
+        isActive: true,
+      });
+
+      if (!teamMember) {
+        return res.status(403).json({
+          message: "Forbidden: You are not an active team member",
+        });
+      }
+
+      // Check if they have permission to manage verification requests
+      if (!teamMember.permissions.canManageVerificationRequests) {
+        return res.status(403).json({
+          message:
+            "Forbidden: You don't have permission to manage verification requests",
+        });
+      }
+    }
+    // Individual user (not part of organization)
+    else {
+      // Only creator can approve
+      if (!isCreator) {
+        return res.status(403).json({
+          message:
+            "Forbidden: You can only manage verification requests for your own tenders",
+        });
+      }
     }
 
     // Generate verification code if it doesn't exist
@@ -244,6 +327,39 @@ export const approveVerificationCodeRequest = async (req, res) => {
       },
     });
 
+    // Log activity if tender belongs to an organization
+    console.log("[APPROVE] Checking activity log conditions:");
+    console.log("  - tender.organization:", tender.organization);
+    console.log("  - req.user.organizationId:", req.user.organizationId);
+
+    if (tender.organization) {
+      console.log(
+        "[APPROVE] Logging activity for organization:",
+        tender.organization
+      );
+      try {
+        await logActivity({
+          organizationId: tender.organization,
+          userId: req.user._id,
+          action: "approve_verification_request",
+          targetType: "verification_request",
+          targetId: request._id,
+          details: {
+            tenderId: tender._id,
+            tenderTitle: tender.title,
+            requestedBy: request.requestedBy.email,
+            approvedBy: req.user.email,
+          },
+          req,
+        });
+        console.log("[APPROVE] Activity logged successfully");
+      } catch (logError) {
+        console.error("[APPROVE] Error logging activity:", logError);
+      }
+    } else {
+      console.log("[APPROVE] No organization - activity not logged");
+    }
+
     res.json({
       message: "Verification code request approved and sent to bidder",
       request,
@@ -254,17 +370,17 @@ export const approveVerificationCodeRequest = async (req, res) => {
   }
 };
 
-// ------------------- REJECT VERIFICATION CODE REQUEST -------------------
+// Reject verification code request
 export const rejectVerificationCodeRequest = async (req, res) => {
   try {
     const { requestId } = req.params;
     const { reason } = req.body;
 
     const request = await VerificationCodeRequest.findById(requestId)
-      .populate("tender", "title createdBy")
+      .populate("tender", "title createdBy organization")
       .populate({
         path: "requestedBy",
-        select: "name email company phone role"
+        select: "name email company phone role",
       });
 
     if (!request) {
@@ -278,18 +394,62 @@ export const rejectVerificationCodeRequest = async (req, res) => {
     }
 
     // Check authorization
-    if (
-      req.user.role !== "admin" &&
-      String(request.tender.createdBy) !== String(req.user._id)
-    ) {
-      return res
-        .status(403)
-        .json({ message: "Not authorized to reject this request" });
+    const isAdmin = req.user.role === "admin";
+    const isCreator = String(request.tender.createdBy) === String(req.user._id);
+    const sameOrganization =
+      req.user.organizationId &&
+      request.tender.organization &&
+      String(request.tender.organization) === String(req.user.organizationId);
+
+    // Admin can always reject
+    if (isAdmin) {
+      // Continue to rejection logic
+    }
+    // If user belongs to an organization (team member)
+    else if (req.user.organizationId) {
+      // Check if tender belongs to same organization
+      if (!sameOrganization) {
+        return res.status(403).json({
+          message:
+            "Forbidden: You don't have permission to manage verification requests",
+        });
+      }
+
+      // Get team member permissions
+      const teamMember = await TeamMember.findOne({
+        organization: req.user.organizationId,
+        user: req.user._id,
+        isActive: true,
+      });
+
+      if (!teamMember) {
+        return res.status(403).json({
+          message: "Forbidden: You are not an active team member",
+        });
+      }
+
+      // Check if they have permission to manage verification requests
+      if (!teamMember.permissions.canManageVerificationRequests) {
+        return res.status(403).json({
+          message:
+            "Forbidden: You don't have permission to manage verification requests",
+        });
+      }
+    }
+    // Individual user (not part of organization)
+    else {
+      // Only creator can reject
+      if (!isCreator) {
+        return res.status(403).json({
+          message:
+            "Forbidden: You can only manage verification requests for your own tenders",
+        });
+      }
     }
 
     // Update request status
     request.status = "rejected";
-    request.rejectionReason = reason || "Request rejected by administrator";
+    request.rejectionReason = reason || "Request rejected by the tender issuer";
     await request.save();
 
     // Create notification for the requester
@@ -305,6 +465,43 @@ export const rejectVerificationCodeRequest = async (req, res) => {
         requestId: request._id,
       },
     });
+
+    // Log activity if tender belongs to an organization
+    console.log("[REJECT] Checking activity log conditions:");
+    console.log(
+      "  - request.tender.organization:",
+      request.tender.organization
+    );
+    console.log("  - req.user.organizationId:", req.user.organizationId);
+
+    if (request.tender.organization) {
+      console.log(
+        "[REJECT] Logging activity for organization:",
+        request.tender.organization
+      );
+      try {
+        await logActivity({
+          organizationId: request.tender.organization,
+          userId: req.user._id,
+          action: "reject_verification_request",
+          targetType: "verification_request",
+          targetId: request._id,
+          details: {
+            tenderId: request.tender._id,
+            tenderTitle: request.tender.title,
+            requestedBy: request.requestedBy.email,
+            rejectedBy: req.user.email,
+            reason: reason || "No reason provided",
+          },
+          req,
+        });
+        console.log("[REJECT] Activity logged successfully");
+      } catch (logError) {
+        console.error("[REJECT] Error logging activity:", logError);
+      }
+    } else {
+      console.log("[REJECT] No organization - activity not logged");
+    }
 
     res.json({
       message: "Verification code request rejected",

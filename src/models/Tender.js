@@ -41,6 +41,14 @@ const tenderSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    organization: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+    },
+    lastModifiedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
     verificationCode: { type: String },
     applications: [
       { type: mongoose.Schema.Types.ObjectId, ref: "Application" },

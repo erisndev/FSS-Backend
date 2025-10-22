@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 
 // ------------------- SMTP Setup -------------------
+// Configure email transporter
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
   port: Number(process.env.EMAIL_PORT) || 587,
@@ -12,19 +13,27 @@ const transporter = nodemailer.createTransport({
 });
 
 // ------------------- Helper to send email -------------------
-const sendEmail = async ({ to, subject, html, text }) => {
+// Core email sending function
+const sendEmail = async ({ to, subject, html, text, cc }) => {
   if (!to) {
     throw new Error("Email recipient is missing");
   }
 
   try {
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: `"Tender Management System" <${process.env.EMAIL_USER}>`,
       to,
       subject,
       text: text || "",
       html: html || "",
-    });
+    };
+
+    // Add CC if provided
+    if (cc) {
+      mailOptions.cc = cc;
+    }
+
+    const info = await transporter.sendMail(mailOptions);
     console.log("Email sent:", info.messageId);
     return info;
   } catch (err) {
@@ -34,6 +43,7 @@ const sendEmail = async ({ to, subject, html, text }) => {
 };
 
 // ------------------- Professional HTML Templates -------------------
+// Wrap email content in professional template
 const templateWrapper = (title, body) => `
   <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0;">
     <div style="background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); color: #ffffff; padding: 30px 20px; text-align: center; border-radius: 8px 8px 0 0;">
@@ -55,6 +65,7 @@ const templateWrapper = (title, body) => `
 `;
 
 // ------------------- Auth Emails with OTP -------------------
+// Send registration OTP email
 export const sendRegisterOTPEmail = async (user, otp) => {
   await sendEmail({
     to: user.email,
@@ -73,6 +84,7 @@ export const sendRegisterOTPEmail = async (user, otp) => {
   });
 };
 
+// Send password reset OTP email
 export const sendResetPasswordOTPEmail = async (user, otp) => {
   await sendEmail({
     to: user.email,
@@ -92,6 +104,7 @@ export const sendResetPasswordOTPEmail = async (user, otp) => {
 };
 
 // ------------------- Tender Emails -------------------
+// Send tender creation confirmation email
 export const sendTenderCreatedEmail = async (tender) => {
   const creator = tender.createdBy;
   const formattedDeadline = tender.deadline.toLocaleDateString("en-US", {
@@ -123,6 +136,7 @@ export const sendTenderCreatedEmail = async (tender) => {
   });
 };
 
+// Send tender status update email
 export const sendTenderStatusEmail = async (tender, status) => {
   const creator = tender.createdBy;
   const statusDisplay = status.charAt(0).toUpperCase() + status.slice(1);
@@ -144,6 +158,7 @@ export const sendTenderStatusEmail = async (tender, status) => {
   });
 };
 
+// Send general tender notification email
 export const sendTenderNotificationEmail = async (email, tender, type) => {
   let subject = "",
     body = "";
@@ -194,12 +209,24 @@ export const sendTenderNotificationEmail = async (email, tender, type) => {
 };
 
 // ------------------- Application Emails -------------------
+// Send new application notification to tender creator
 export const sendApplicationSubmittedEmail = async (application) => {
   const tenderCreator = application.tender.createdBy;
   const bidder = application.bidder;
+  
+  // Get organization email if tender belongs to an organization
+  let organizationEmail = null;
+  if (application.tender.organization) {
+    const Organization = (await import("../models/Organization.js")).default;
+    const org = await Organization.findById(application.tender.organization);
+    if (org && org.email && org.email !== tenderCreator.email) {
+      organizationEmail = org.email;
+    }
+  }
 
   await sendEmail({
     to: tenderCreator.email,
+    cc: organizationEmail,
     subject: `New Tender Application Received: "${application.tender.title}"`,
     html: templateWrapper(
       "New Application Received",
@@ -227,6 +254,7 @@ export const sendApplicationSubmittedEmail = async (application) => {
   });
 };
 
+// Send application status update to applicant
 export const sendApplicationStatusEmail = async (user, application) => {
   const statusFriendly = application.status
     ? application.status.charAt(0).toUpperCase() + application.status.slice(1)
@@ -276,6 +304,7 @@ export const sendApplicationStatusEmail = async (user, application) => {
 };
 
 // ------------------- Deadline Reminder Emails -------------------
+// Send tender deadline reminder email
 export const sendTenderDeadlineReminder = async (tender) => {
   const creator = tender.createdBy;
   const formattedDeadline = tender.deadline.toLocaleDateString("en-US", {
@@ -307,6 +336,7 @@ export const sendTenderDeadlineReminder = async (tender) => {
 };
 
 // ------------------- Verification Code Email -------------------
+// Send verification code to user
 export const sendVerificationCodeEmail = async (user, tenderTitle, verificationCode) => {
   await sendEmail({
     to: user.email,
@@ -336,9 +366,21 @@ export const sendVerificationCodeEmail = async (user, tenderTitle, verificationC
 };
 
 // ------------------- Verification Code Request Notification Email -------------------
+// Notify tender creator of verification code request
 export const sendVerificationCodeRequestEmail = async (tenderCreator, tender, requester, message) => {
+  // Get organization email if tender belongs to an organization
+  let organizationEmail = null;
+  if (tender.organization) {
+    const Organization = (await import("../models/Organization.js")).default;
+    const org = await Organization.findById(tender.organization);
+    if (org && org.email && org.email !== tenderCreator.email) {
+      organizationEmail = org.email;
+    }
+  }
+
   await sendEmail({
     to: tenderCreator.email,
+    cc: organizationEmail,
     subject: `New Verification Code Request for Tender: "${tender.title}"`,
     html: templateWrapper(
       "Verification Code Request Received",
@@ -362,6 +404,49 @@ export const sendVerificationCodeRequestEmail = async (tenderCreator, tender, re
          <p style="margin: 0;">Please log in to your dashboard to review and approve or reject this verification code request. The bidder will not be able to apply for your tender until you approve their request.</p>
        </div>
        <p style="margin: 0 0 20px 0;">You can manage all verification code requests from your dashboard under the "Verification Requests" section.</p>
+       <p style="margin: 0;">Best regards,<br>The Tender Management Team</p>`
+    ),
+  });
+};
+
+// ------------------- Team Invitation Email -------------------
+// Send team invitation email
+export const sendTeamInvitationEmail = async (user, organization, invitedBy, invitationLink = null) => {
+  const hasLink = !!invitationLink;
+  
+  await sendEmail({
+    to: user.email,
+    subject: `Team Invitation: Join ${organization.name}`,
+    html: templateWrapper(
+      "Team Invitation",
+      `<p style="margin: 0 0 20px 0;">Dear ${user.name},</p>
+       <p style="margin: 0 0 20px 0;">You have been invited to join <strong>${organization.name}</strong> as a team member by ${invitedBy}.</p>
+       <div style="background-color: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 20px; margin: 25px 0;">
+         <h3 style="margin: 0 0 15px 0; color: #0369a1;">Organization Details</h3>
+         <p style="margin: 0 0 10px 0;"><strong>Organization:</strong> ${organization.name}</p>
+         <p style="margin: 0 0 10px 0;"><strong>Shared Email:</strong> ${organization.email}</p>
+         <p style="margin: 0;"><strong>Invited By:</strong> ${invitedBy}</p>
+       </div>
+       ${hasLink ? `
+       <div style="background-color: #f0fdf4; border: 1px solid #22c55e; border-radius: 6px; padding: 20px; margin: 25px 0; text-align: center;">
+         <h4 style="margin: 0 0 15px 0; color: #16a34a;">Accept Your Invitation</h4>
+         <p style="margin: 0 0 15px 0;">Click the button below to set your password and join the team:</p>
+         <a href="${invitationLink}" style="display: inline-block; background-color: #22c55e; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">Accept Invitation</a>
+         <p style="margin: 15px 0 0 0; font-size: 12px; color: #6b7280;">This invitation link will expire in 7 days.</p>
+       </div>
+       ` : ''}
+       <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; padding: 20px; margin: 25px 0;">
+         <h4 style="margin: 0 0 10px 0; color: #d97706;">How to Access Your Account</h4>
+         <ol style="margin: 0; padding-left: 20px;">
+           ${hasLink ? '<li style="margin-bottom: 8px;">Click the "Accept Invitation" button above and set your password</li>' : ''}
+           <li style="margin-bottom: 8px;">Go to the login page</li>
+           <li style="margin-bottom: 8px;">Enter the shared email: <strong>${organization.email}</strong></li>
+           <li style="margin-bottom: 8px;">Select your name from the team member list</li>
+           <li style="margin-bottom: 8px;">Enter your password to log in</li>
+         </ol>
+       </div>
+       <p style="margin: 0 0 20px 0;">As a team member, you will have access to manage tenders and applications on behalf of your organization.</p>
+       <p style="margin: 0 0 20px 0;">If you have any questions or did not expect this invitation, please contact the team leader or our support team.</p>
        <p style="margin: 0;">Best regards,<br>The Tender Management Team</p>`
     ),
   });

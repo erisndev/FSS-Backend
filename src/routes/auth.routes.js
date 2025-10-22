@@ -6,6 +6,7 @@ import {
   login,
   me,
   updateMe,
+  changePassword,
   getAllUsers,
   getUserById,
   updateUserById,
@@ -37,6 +38,7 @@ router.post("/resend-reset-otp", resendPasswordResetOTP);
 // ---------------- CURRENT USER ----------------
 router.get("/me", protect, me);
 router.put("/me", protect, updateMe);
+router.put("/change-password", protect, changePassword);
 
 // ---------------- ADMIN ----------------
 router.get("/", protect, authorize("admin"), getAllUsers);

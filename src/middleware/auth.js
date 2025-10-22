@@ -1,29 +1,63 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
+// Protect routes by verifying JWT token
 export const protect = async (req, res, next) => {
   try {
-    let token;
-    if (req.headers.authorization?.startsWith("Bearer")) {
-      token = req.headers.authorization.split(" ")[1];
-    } else if (req.cookies?.token) {
-      token = req.cookies.token;
+    // Extract token from Authorization header
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ 
+        message: "No token provided",
+        code: "NO_TOKEN"
+      });
     }
 
-    if (!token) return res.status(401).json({ message: "Not authorized" });
+    const token = authHeader.replace("Bearer ", "");
 
+    // Verify token - this automatically checks expiration
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Find user and check if active
     const user = await User.findById(decoded.id);
-    if (!user || !user.isActive)
-      return res.status(401).json({ message: "User not active" });
+    if (!user || !user.isActive) {
+      return res.status(401).json({ 
+        message: "User not active",
+        code: "USER_INACTIVE"
+      });
+    }
 
+    // Attach user info to request
     req.user = user;
+    req.userId = decoded.id;
+    
     next();
-  } catch (err) {
-    res.status(401).json({ message: "Invalid token" });
+  } catch (error) {
+    // Handle specific JWT errors
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({ 
+        message: "Token has expired. Please login again.",
+        code: "TOKEN_EXPIRED",
+        expired: true
+      });
+    }
+    
+    if (error.name === "JsonWebTokenError") {
+      return res.status(401).json({ 
+        message: "Invalid token",
+        code: "INVALID_TOKEN"
+      });
+    }
+    
+    return res.status(401).json({ 
+      message: "Authentication failed",
+      code: "AUTH_FAILED"
+    });
   }
 };
 
+// Authorize user based on role
 export const authorize =
   (...roles) =>
   (req, res, next) => {

@@ -3,14 +3,16 @@ import Application from "../models/Application.js";
 import Notification from "../models/Notification.js";
 import Tender from "../models/Tender.js";
 import User from "../models/User.js";
+import TeamMember from "../models/TeamMember.js";
 import VerificationCodeRequest from "../models/VerificationCodeRequest.js";
 import {
   sendApplicationSubmittedEmail,
   sendApplicationStatusEmail,
 } from "../utils/emails.js";
 import { autoCloseTenders } from "../utils/tenderUtils.js";
+import { logActivity } from "../utils/activityLogger.js";
 
-// ------------------- APPLY TO TENDER -------------------
+// Apply to a tender
 export const applyToTender = async (req, res) => {
   try {
     console.log("Files received:", req.files);
@@ -151,7 +153,7 @@ export const applyToTender = async (req, res) => {
   }
 };
 
-// ------------------- GET MY APPLICATIONS -------------------
+// Get my applications
 export const myApplications = async (req, res) => {
   try {
     const applications = await Application.find({
@@ -164,7 +166,7 @@ export const myApplications = async (req, res) => {
   }
 };
 
-// ------------------- GET RECEIVED APPLICATIONS -------------------
+// Get received applications for a tender
 export const receivedApplications = async (req, res) => {
   try {
     const { tenderId } = req.params;
@@ -174,11 +176,52 @@ export const receivedApplications = async (req, res) => {
     const tender = await Tender.findById(tenderId);
     if (!tender) return res.status(404).json({ message: "Tender not found" });
 
-    if (
-      String(tender.createdBy) !== String(req.user._id) &&
-      req.user.role !== "admin"
-    ) {
-      return res.status(403).json({ message: "Forbidden" });
+    const isAdmin = req.user.role === "admin";
+    const isCreator = String(tender.createdBy) === String(req.user._id);
+    const sameOrganization = req.user.organizationId && tender.organization && 
+                             String(tender.organization) === String(req.user.organizationId);
+
+    // Admin can always view
+    if (isAdmin) {
+      // Continue to fetch logic
+    }
+    // If user belongs to an organization (team member)
+    else if (req.user.organizationId) {
+      // Check if tender belongs to same organization
+      if (!sameOrganization) {
+        return res.status(403).json({ 
+          message: "Forbidden: You don't have permission to view applications" 
+        });
+      }
+
+      // Get team member permissions
+      const teamMember = await TeamMember.findOne({
+        organization: req.user.organizationId,
+        user: req.user._id,
+        isActive: true,
+      });
+
+      if (!teamMember) {
+        return res.status(403).json({ 
+          message: "Forbidden: You are not an active team member" 
+        });
+      }
+
+      // Check if they have view permission (even if they created it)
+      if (!teamMember.permissions.canViewApplications) {
+        return res.status(403).json({ 
+          message: "Forbidden: You don't have permission to view applications" 
+        });
+      }
+    }
+    // Individual user (not part of organization)
+    else {
+      // Only creator can view applications
+      if (!isCreator) {
+        return res.status(403).json({ 
+          message: "Forbidden: You can only view applications for your own tenders" 
+        });
+      }
     }
 
     const applications = await Application.find({ tender: tenderId })
@@ -192,22 +235,64 @@ export const receivedApplications = async (req, res) => {
   }
 };
 
-// ------------------- GET APPLICATION BY ID -------------------
+// Get application by ID
 export const getApplicationById = async (req, res) => {
   try {
     const application = await Application.findById(req.params.id)
       .populate("bidder", "name email company role")
-      .populate("tender", "title description deadline createdBy");
+      .populate("tender", "title description deadline createdBy organization");
 
     if (!application)
       return res.status(404).json({ message: "Application not found" });
 
-    if (
-      String(application.bidder._id) !== String(req.user._id) &&
-      String(application.tender.createdBy) !== String(req.user._id) &&
-      req.user.role !== "admin"
-    )
-      return res.status(403).json({ message: "Forbidden" });
+    const isAdmin = req.user.role === "admin";
+    const isApplicant = String(application.bidder._id) === String(req.user._id);
+    const isCreator = String(application.tender.createdBy) === String(req.user._id);
+    const sameOrganization = req.user.organizationId && application.tender.organization && 
+                             String(application.tender.organization) === String(req.user.organizationId);
+
+    // Admin or applicant can always view
+    if (isAdmin || isApplicant) {
+      // Continue to return logic
+    }
+    // If user belongs to an organization (team member)
+    else if (req.user.organizationId) {
+      // Check if tender belongs to same organization
+      if (!sameOrganization) {
+        return res.status(403).json({ 
+          message: "Forbidden: You don't have permission to view this application" 
+        });
+      }
+
+      // Get team member permissions
+      const teamMember = await TeamMember.findOne({
+        organization: req.user.organizationId,
+        user: req.user._id,
+        isActive: true,
+      });
+
+      if (!teamMember) {
+        return res.status(403).json({ 
+          message: "Forbidden: You are not an active team member" 
+        });
+      }
+
+      // Check if they have view permission
+      if (!teamMember.permissions.canViewApplications) {
+        return res.status(403).json({ 
+          message: "Forbidden: You don't have permission to view applications" 
+        });
+      }
+    }
+    // Individual user (not part of organization)
+    else {
+      // Only creator can view
+      if (!isCreator) {
+        return res.status(403).json({ 
+          message: "Forbidden: You can only view applications for your own tenders" 
+        });
+      }
+    }
 
     res.json(application);
   } catch (err) {
@@ -216,7 +301,7 @@ export const getApplicationById = async (req, res) => {
   }
 };
 
-// ------------------- SET APPLICATION STATUS -------------------
+// Set application status (accept/reject)
 export const setApplicationStatus = async (req, res) => {
   try {
     const { id } = req.params;
@@ -226,11 +311,53 @@ export const setApplicationStatus = async (req, res) => {
     if (!application)
       return res.status(404).json({ message: "Application not found" });
 
-    if (
-      String(application.tender.createdBy) !== String(req.user._id) &&
-      req.user.role !== "admin"
-    )
-      return res.status(403).json({ message: "Forbidden" });
+    const isAdmin = req.user.role === "admin";
+    const isCreator = String(application.tender.createdBy) === String(req.user._id);
+    const sameOrganization = req.user.organizationId && application.tender.organization && 
+                             String(application.tender.organization) === String(req.user.organizationId);
+
+    // Admin can always manage
+    if (isAdmin) {
+      // Continue to update logic
+    }
+    // If user belongs to an organization (team member)
+    else if (req.user.organizationId) {
+      // Check if tender belongs to same organization
+      if (!sameOrganization) {
+        return res.status(403).json({ 
+          message: "Forbidden: You don't have permission to manage applications" 
+        });
+      }
+
+      // Get team member permissions
+      const teamMember = await TeamMember.findOne({
+        organization: req.user.organizationId,
+        user: req.user._id,
+        isActive: true,
+      });
+
+      if (!teamMember) {
+        return res.status(403).json({ 
+          message: "Forbidden: You are not an active team member" 
+        });
+      }
+
+      // Check if they have accept/reject permission (even if they created it)
+      if (!teamMember.permissions.canAcceptReject) {
+        return res.status(403).json({ 
+          message: "Forbidden: You don't have permission to accept or reject applications" 
+        });
+      }
+    }
+    // Individual user (not part of organization)
+    else {
+      // Only creator can manage
+      if (!isCreator) {
+        return res.status(403).json({ 
+          message: "Forbidden: You can only manage applications for your own tenders" 
+        });
+      }
+    }
 
     // Update application status and comment
     if (status) application.status = status;
@@ -253,7 +380,26 @@ export const setApplicationStatus = async (req, res) => {
       meta: { tenderId: application.tender._id, applicationId: id },
     });
 
-    // ✅ If accepted, archive tender and reject other pending applications
+    // Log activity if user belongs to an organization
+    if (req.user.organizationId) {
+      await logActivity({
+        organizationId: req.user.organizationId,
+        userId: req.user._id,
+        action: status === "accepted" ? "accept_application" : status === "rejected" ? "reject_application" : "update_application",
+        targetType: "application",
+        targetId: application._id,
+        details: {
+          applicationId: application._id,
+          tenderId: application.tender._id,
+          tenderTitle: application.tender.title,
+          newStatus: status,
+          comment: comment || null,
+        },
+        req,
+      });
+    }
+
+    // If accepted, archive tender and reject other pending applications
     if (status === "accepted") {
       const tender = await Tender.findById(application.tender._id);
       if (tender) {
@@ -303,7 +449,7 @@ export const setApplicationStatus = async (req, res) => {
   }
 };
 
-// ------------------- WITHDRAW APPLICATION -------------------
+// Withdraw application
 export const withdrawApplication = async (req, res) => {
   try {
     const { id } = req.params;
@@ -340,7 +486,7 @@ export const withdrawApplication = async (req, res) => {
   }
 };
 
-// ------------------- GET ALL APPLICATIONS -------------------
+// Get all applications (admin only)
 export const getAllApplications = async (req, res) => {
   try {
     const applications = await Application.find()

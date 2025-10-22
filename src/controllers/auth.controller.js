@@ -1,23 +1,25 @@
-// controllers/auth.controller.js
 import User from "../models/User.js";
+import Organization from "../models/Organization.js";
+import TeamMember from "../models/TeamMember.js";
 import jwt from "jsonwebtoken";
 import {
   sendRegisterOTPEmail,
   sendResetPasswordOTPEmail,
 } from "../utils/emails.js";
 import Notification from "../models/Notification.js";
+import { logActivity } from "../utils/activityLogger.js";
+import { generateAccessToken } from "../utils/tokenHelper.js";
 
-// ---------------- JWT GENERATOR ----------------
+// Generate JWT token
 const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN,
-  });
+  return generateAccessToken({ id: userId });
 };
 
-// ---------------- REGISTER ----------------
+// Register new user
 export const register = async (req, res) => {
   try {
-    const { name, email, password, role, company, description } = req.body;
+    const { name, email, password, role, company, description, contactPhone } =
+      req.body;
     const existing = await User.findOne({ email });
     if (existing)
       return res.status(400).json({ message: "Email already exists" });
@@ -28,8 +30,42 @@ export const register = async (req, res) => {
       password,
       role,
       company,
-      description,
+      description: description || "",
     });
+
+    // If registering as issuer, create organization and team leader
+    if (role === "issuer") {
+      const organization = await Organization.create({
+        name: company || name,
+        email: email,
+
+        contactPhone: contactPhone || "",
+        teamLeader: user._id,
+        isActive: true,
+      });
+
+      // Update user with organization info
+      user.organizationId = organization._id;
+      user.memberRole = "team_leader";
+      await user.save({ validateBeforeSave: false });
+
+      // Create team member record with ALL permissions
+      await TeamMember.create({
+        organization: organization._id,
+        user: user._id,
+        role: "team_leader",
+        permissions: {
+          canCreateTenders: true,
+          canEditTenders: true,
+          canDeleteTenders: true,
+          canViewApplications: true,
+          canAcceptReject: true,
+          canManageVerificationRequests: true,
+          canManageTeam: true,
+        },
+        isActive: true,
+      });
+    }
 
     // Generate OTP for email verification
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -43,24 +79,30 @@ export const register = async (req, res) => {
       title: "Welcome to the platform",
       body: `User ${user.name} registered successfully.`,
     });
+
     // Notify all admins
     const admins = await User.find({ role: "admin" });
-    const adminNotifications = admins.map((admin) => ({
-      user: admin._id,
-      type: "system",
-      title: "New User Registered",
-      body: `User ${user.name} has registered on the platform.`,
-    }));
-    // ✅ Pass full user object here
+    if (admins.length > 0) {
+      const adminNotifications = admins.map((admin) => ({
+        user: admin._id,
+        type: "system",
+        title: "New User Registered",
+        body: `User ${user.name} has registered on the platform.`,
+      }));
+      await Notification.insertMany(adminNotifications);
+    }
+
+    // Send OTP email
     await sendRegisterOTPEmail(user, otp);
 
     res.status(201).json({ message: "User created, OTP sent to email" });
   } catch (err) {
+    console.error("Registration error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-// ---------------- VERIFY REGISTER OTP ----------------
+// Verify registration OTP
 export const verifyRegisterOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -83,6 +125,18 @@ export const verifyRegisterOTP = async (req, res) => {
     const token = generateToken(user._id);
     await user.save();
 
+    // Get team member info if user is an issuer
+    let permissions = null;
+    if (user.role === "issuer" && user.organizationId) {
+      const teamMember = await TeamMember.findOne({
+        user: user._id,
+        organization: user.organizationId,
+      });
+      if (teamMember) {
+        permissions = teamMember.permissions;
+      }
+    }
+
     res.json({
       message: "Email verified successfully",
       token,
@@ -93,6 +147,9 @@ export const verifyRegisterOTP = async (req, res) => {
         role: user.role,
         company: user.company,
         description: user.description,
+        organizationId: user.organizationId,
+        memberRole: user.memberRole,
+        permissions: permissions,
       },
     });
   } catch (err) {
@@ -100,7 +157,7 @@ export const verifyRegisterOTP = async (req, res) => {
   }
 };
 
-// ---------------- VERIFY RESET PASSWORD OTP ----------------
+// Verify password reset OTP
 export const verifyResetOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -117,7 +174,6 @@ export const verifyResetOTP = async (req, res) => {
         .json({ message: "Invalid or expired password reset OTP" });
 
     await user.save();
-    // ✅ Send notification
 
     res.json({
       message: "Password reset OTP verified. You can now set a new password.",
@@ -127,7 +183,7 @@ export const verifyResetOTP = async (req, res) => {
   }
 };
 
-// ---------------- LOGIN ----------------
+// User login
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -138,8 +194,39 @@ export const login = async (req, res) => {
     if (!user.emailVerified)
       return res.status(403).json({ message: "Email not verified" });
 
+    // Check if user is part of an organization (team member or team leader)
+    if (user.organizationId && user.memberRole) {
+      // Get organization
+      const organization = await Organization.findById(user.organizationId);
+
+      if (organization) {
+        // If user is a regular member (not team leader), they MUST use team login
+        if (user.memberRole === "member") {
+          return res.status(200).json({
+            redirectToTeamLogin: true,
+            message:
+              "Team members must use the Organization login flow. Please login with your organization's shared email.",
+            organizationEmail: organization.email,
+            organizationName: organization.name,
+          });
+        }
+      }
+    }
+
     user.lastLogin = new Date();
     await user.save();
+
+    // Get team member info if user is an issuer
+    let permissions = null;
+    if (user.role === "issuer" && user.organizationId) {
+      const teamMember = await TeamMember.findOne({
+        user: user._id,
+        organization: user.organizationId,
+      });
+      if (teamMember) {
+        permissions = teamMember.permissions;
+      }
+    }
 
     res.json({
       token: generateToken(user._id),
@@ -150,6 +237,9 @@ export const login = async (req, res) => {
         role: user.role,
         company: user.company,
         description: user.description,
+        organizationId: user.organizationId,
+        memberRole: user.memberRole,
+        permissions: permissions,
       },
     });
   } catch (err) {
@@ -157,11 +247,23 @@ export const login = async (req, res) => {
   }
 };
 
-// ---------------- GET CURRENT USER ----------------
+// Get current user profile
 export const me = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Get team member info if user is an issuer
+    let permissions = null;
+    if (user.role === "issuer" && user.organizationId) {
+      const teamMember = await TeamMember.findOne({
+        user: user._id,
+        organization: user.organizationId,
+      });
+      if (teamMember) {
+        permissions = teamMember.permissions;
+      }
+    }
 
     res.json({
       id: user._id,
@@ -170,23 +272,25 @@ export const me = async (req, res) => {
       role: user.role,
       company: user.company,
       description: user.description,
+      organizationId: user.organizationId,
+      memberRole: user.memberRole,
+      permissions: permissions,
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// ---------------- UPDATE CURRENT USER ----------------
+// Update current user profile
 export const updateMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const { name, company, description, password } = req.body;
+    const { name, company, description } = req.body;
     if (name) user.name = name;
     if (company) user.company = company;
     if (description) user.description = description;
-    if (password) user.password = password;
 
     await user.save();
     await Notification.create({
@@ -196,7 +300,6 @@ export const updateMe = async (req, res) => {
       body: `Your profile was updated successfully.`,
     });
 
-    // Return the updated user
     res.json({
       message: "Profile updated successfully",
       user: {
@@ -213,7 +316,53 @@ export const updateMe = async (req, res) => {
   }
 };
 
-// ---------------- ADMIN: GET ALL USERS ----------------
+// Change password (requires current password)
+export const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ 
+        message: "Current password and new password are required" 
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        message: "New password must be at least 6 characters long" 
+      });
+    }
+
+    // Get user with password field
+    const user = await User.findById(req.user._id).select("+password");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Verify current password
+    const isPasswordCorrect = await user.comparePassword(currentPassword);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({ message: "Current password is incorrect" });
+    }
+
+    // Update password
+    user.password = newPassword;
+    await user.save();
+
+    await Notification.create({
+      user: user._id,
+      type: "system",
+      title: "Password Changed",
+      body: `Your password was changed successfully.`,
+    });
+
+    res.json({
+      message: "Password changed successfully",
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Get all users (Admin only)
 export const getAllUsers = async (req, res) => {
   try {
     const users = await User.find().select(
@@ -225,7 +374,7 @@ export const getAllUsers = async (req, res) => {
   }
 };
 
-// ---------------- ADMIN: GET USER BY ID ----------------
+// Get user by ID (Admin only)
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select(
@@ -238,7 +387,7 @@ export const getUserById = async (req, res) => {
   }
 };
 
-// ---------------- ADMIN: UPDATE USER BY ID ----------------
+// Update user by ID (Admin only)
 export const updateUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -264,7 +413,7 @@ export const updateUserById = async (req, res) => {
   }
 };
 
-// ---------------- ADMIN: DELETE USER ----------------
+// Delete user (Admin only)
 export const deleteUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -283,7 +432,7 @@ export const deleteUserById = async (req, res) => {
   }
 };
 
-// ---------------- REQUEST PASSWORD RESET ----------------
+// Request password reset
 export const requestPasswordReset = async (req, res) => {
   try {
     const { email } = req.body;
@@ -295,7 +444,6 @@ export const requestPasswordReset = async (req, res) => {
     user.resetPasswordOTPExpires = Date.now() + 10 * 60 * 1000; // 10 mins
     await user.save({ validateBeforeSave: false });
 
-    // ✅ Pass full user object
     await sendResetPasswordOTPEmail(user, otp);
 
     res.json({ message: "Password reset OTP sent" });
@@ -304,7 +452,7 @@ export const requestPasswordReset = async (req, res) => {
   }
 };
 
-// ---------------- RESET PASSWORD ----------------
+// Reset password with OTP
 export const resetPassword = async (req, res) => {
   try {
     const { email, otp, password } = req.body;
@@ -329,7 +477,7 @@ export const resetPassword = async (req, res) => {
   }
 };
 
-// ---------------- RESEND REGISTRATION OTP ----------------
+// Resend registration OTP
 export const resendRegisterOTP = async (req, res) => {
   try {
     const { email } = req.body;
@@ -339,7 +487,6 @@ export const resendRegisterOTP = async (req, res) => {
     if (user.emailVerified)
       return res.status(400).json({ message: "Email already verified" });
 
-    // Generate new OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.emailOTP = otp;
     user.emailOTPExpires = Date.now() + 10 * 60 * 1000; // 10 mins
@@ -353,14 +500,13 @@ export const resendRegisterOTP = async (req, res) => {
   }
 };
 
-// ---------------- RESEND PASSWORD RESET OTP ----------------
+// Resend password reset OTP
 export const resendPasswordResetOTP = async (req, res) => {
   try {
     const { email } = req.body;
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Generate new OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.resetPasswordOTP = otp;
     user.resetPasswordOTPExpires = Date.now() + 10 * 60 * 1000; // 10 mins

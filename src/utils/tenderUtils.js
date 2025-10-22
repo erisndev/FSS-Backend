@@ -1,9 +1,6 @@
-// utils/tenderUtils.js
 import Tender from "../models/Tender.js";
 
-/**
- * Close all tenders whose deadline has passed and are still active
- */
+// Close all tenders whose deadline has passed
 export const autoCloseTenders = async () => {
   try {
     const now = new Date();

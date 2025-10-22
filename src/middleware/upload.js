@@ -1,18 +1,18 @@
-// backend/middleware/upload.js
 import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
 import path from "path";
 
+// Initialize Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// Use memory storage
+// Configure Multer with memory storage
 const storage = multer.memoryStorage();
 export const upload = multer({ storage });
 
-// Function to upload a file buffer to Supabase Storage
+// Upload file to Supabase Storage
 export const uploadToSupabase = async (file, tenderName = "general") => {
   console.log(
     "[uploadToSupabase] Starting upload for file:",
@@ -46,10 +46,11 @@ export const uploadToSupabase = async (file, tenderName = "general") => {
   return publicUrl.publicUrl;
 };
 
-// Protect & authorize middleware
+// Authentication middleware (duplicate of auth.js)
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
+// Protect routes by verifying JWT token
 export const protect = async (req, res, next) => {
   try {
     let token;
@@ -76,6 +77,7 @@ export const protect = async (req, res, next) => {
   }
 };
 
+// Authorize user based on role
 export const authorize =
   (...roles) =>
   (req, res, next) => {

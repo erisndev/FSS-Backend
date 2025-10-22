@@ -16,6 +16,16 @@ const userSchema = new mongoose.Schema(
     company: { type: String },
     isActive: { type: Boolean, default: true },
     lastLogin: { type: Date, default: null },
+    // Team-based organization fields
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+    },
+    memberRole: {
+      type: String,
+      enum: ["team_leader", "member", null],
+      default: null,
+    },
     resetPasswordToken: String,
     resetPasswordExpires: Date,
     emailVerified: { type: Boolean, default: false },
