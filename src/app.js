@@ -71,10 +71,13 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 // ---------------- Rate Limiters ----------------
+// Use much higher rate limits in development to avoid blocking local testing.
+const isProd = process.env.NODE_ENV === "production";
+
 // General rate limiter
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: isProd ? 500 : 1000, // allow more requests in dev
   message: "Too many requests from this IP, please try again later",
   standardHeaders: true,
   legacyHeaders: false,
@@ -83,7 +86,7 @@ const generalLimiter = rateLimit({
 // Strict rate limiter for authentication endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 requests per windowMs
+  max: isProd ? 5 : 50,
   message: "Too many authentication attempts, please try again later",
   skipSuccessfulRequests: true,
 });
@@ -91,7 +94,7 @@ const authLimiter = rateLimit({
 // OTP rate limiter
 const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3, // Limit each IP to 3 OTP requests per hour
+  max: isProd ? 3 : 30,
   message: "Too many OTP requests, please try again later",
 });
 
