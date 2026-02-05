@@ -20,13 +20,18 @@ export const register = async (req, res) => {
   try {
     const { name, email, password, role, company, description, contactPhone } =
       req.body;
-    const existing = await User.findOne({ email });
+
+    const normalizedEmail = String(email || "")
+      .trim()
+      .toLowerCase();
+
+    const existing = await User.findOne({ email: normalizedEmail });
     if (existing)
       return res.status(400).json({ message: "Email already exists" });
 
     const user = await User.create({
       name,
-      email,
+      email: normalizedEmail,
       password,
       role,
       company,
@@ -68,9 +73,22 @@ export const register = async (req, res) => {
     }
 
     // Generate OTP for email verification
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Reuse existing OTP if still valid to avoid mismatch due to duplicate calls.
+    const now = Date.now();
+    const hasValidExistingOtp =
+      user.emailOTP &&
+      user.emailOTPExpires &&
+      new Date(user.emailOTPExpires).getTime() > now;
+
+    const otp = hasValidExistingOtp
+      ? String(user.emailOTP).trim()
+      : Math.floor(100000 + Math.random() * 900000).toString();
+
     user.emailOTP = otp;
-    user.emailOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    // If we reused, keep the existing expiry; otherwise set a fresh expiry.
+    if (!hasValidExistingOtp) {
+      user.emailOTPExpires = new Date(now + 10 * 60 * 1000); // 10 minutes
+    }
 
     await user.save({ validateBeforeSave: false });
 
@@ -107,17 +125,56 @@ export const register = async (req, res) => {
 export const verifyRegisterOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
-    const user = await User.findOne({ email });
+
+    if (!email || !otp) {
+      return res.status(400).json({ message: "Email and OTP are required" });
+    }
+
+    // Email is stored lowercase in Mongo, normalize incoming value
+    const normalizedEmail = String(email).trim().toLowerCase();
+
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    if (
-      !user.emailOTP ||
-      String(user.emailOTP).trim() !== String(otp).trim() ||
-      user.emailOTPExpires < new Date()
-    ) {
-      return res
-        .status(400)
-        .json({ message: "Invalid or expired registration OTP" });
+    const storedOtp = user.emailOTP ? String(user.emailOTP).trim() : null;
+    const providedOtp = String(otp).trim();
+    const expiresAt = user.emailOTPExpires
+      ? new Date(user.emailOTPExpires)
+      : null;
+
+    // If OTP is not present or doesn't match
+    if (!storedOtp || storedOtp !== providedOtp) {
+      return res.status(400).json({
+        message: "Invalid or expired registration OTP",
+        // Helpful debug info (safe): does not disclose OTP value
+        debug:
+          process.env.NODE_ENV === "production"
+            ? undefined
+            : {
+                hasStoredOtp: Boolean(storedOtp),
+                providedOtpLength: providedOtp.length,
+                storedOtpLength: storedOtp ? storedOtp.length : 0,
+                expiresAt: expiresAt ? expiresAt.toISOString() : null,
+                now: new Date().toISOString(),
+                // Compare without revealing either OTP
+                match: storedOtp === providedOtp,
+              },
+      });
+    }
+
+    // Only treat as expired when expiry exists and is in the past
+    if (expiresAt && expiresAt.getTime() < Date.now()) {
+      return res.status(400).json({
+        message: "Invalid or expired registration OTP",
+        debug:
+          process.env.NODE_ENV === "production"
+            ? undefined
+            : {
+                reason: "expired",
+                expiresAt: expiresAt.toISOString(),
+                now: new Date().toISOString(),
+              },
+      });
     }
 
     user.emailVerified = true;
@@ -465,7 +522,7 @@ export const resetPassword = async (req, res) => {
     if (
       !user.resetPasswordOTP ||
       user.resetPasswordOTP !== otp ||
-      user.resetPasswordOTPExpires < Date.now()
+      user.resetPasswordOTPExpires < new Date()
     )
       return res.status(400).json({ message: "Invalid or expired OTP" });
 
@@ -484,15 +541,49 @@ export const resetPassword = async (req, res) => {
 export const resendRegisterOTP = async (req, res) => {
   try {
     const { email } = req.body;
-    const user = await User.findOne({ email });
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    // Email is stored lowercase in Mongo, normalize incoming value
+    const normalizedEmail = String(email).trim().toLowerCase();
+
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (user.emailVerified)
       return res.status(400).json({ message: "Email already verified" });
 
+    const now = Date.now();
+    const expiresAtMs = user.emailOTPExpires
+      ? new Date(user.emailOTPExpires).getTime()
+      : null;
+
+    // Cooldown to prevent OTP from being overwritten by rapid duplicate calls
+    // (e.g. React StrictMode, double-clicks, retries, etc.)
+    const COOLDOWN_MS = 60 * 1000;
+    const lastIssuedAtMs = expiresAtMs ? expiresAtMs - 10 * 60 * 1000 : null;
+    const withinCooldown =
+      typeof lastIssuedAtMs === "number" && now - lastIssuedAtMs < COOLDOWN_MS;
+
+    const hasValidExistingOtp =
+      user.emailOTP && expiresAtMs && expiresAtMs > now;
+
+    // If within cooldown AND existing OTP is still valid, reuse it (do not overwrite).
+    if (withinCooldown && hasValidExistingOtp) {
+      await sendRegisterOTPEmail(user, String(user.emailOTP).trim());
+      return res.status(200).json({
+        message: "OTP already sent recently. Please check your email.",
+        resendAvailableInSeconds: Math.ceil(
+          (COOLDOWN_MS - (now - lastIssuedAtMs)) / 1000,
+        ),
+      });
+    }
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.emailOTP = otp;
-    user.emailOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+    user.emailOTPExpires = new Date(now + 10 * 60 * 1000); // 10 mins
     await user.save({ validateBeforeSave: false });
 
     await sendRegisterOTPEmail(user, otp);
