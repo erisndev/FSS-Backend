@@ -6,6 +6,7 @@ const fileSchema = new mongoose.Schema(
     mimeType: String,
     size: Number,
     url: String,
+    label: String, // Label for the document (e.g., "Bid File Documents", "Supporting Documents", etc.)
   },
   { _id: false }
 );

@@ -17,7 +17,14 @@ router.post(
   "/:tenderId",
   protect,
   authorize("bidder"),
-  upload.array("files"), // <-- multiple files
+  upload.fields([
+    { name: "bidFileDocuments", maxCount: 1 },
+    { name: "compiledDocuments", maxCount: 1 },
+    { name: "financialDocuments", maxCount: 1 },
+    { name: "technicalProposal", maxCount: 1 },
+    { name: "proofOfExperience", maxCount: 1 },
+    { name: "supportingDocuments", maxCount: 1 }, // Extra field for applications
+  ]),
   applyToTender
 );
 

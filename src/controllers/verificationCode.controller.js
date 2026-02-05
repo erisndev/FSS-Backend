@@ -126,24 +126,6 @@ export const requestVerificationCode = async (req, res) => {
       });
     }
 
-    // Log activity if tender belongs to an organization
-    if (tender.organization) {
-      await logActivity({
-        organizationId: tender.organization,
-        userId: req.user._id,
-        action: "request_verification_code",
-        targetType: "verification_request",
-        targetId: codeRequest._id,
-        details: {
-          tenderId: tender._id,
-          tenderTitle: tender.title,
-          requestedBy: req.user.email,
-          message: message || "No message provided",
-        },
-        req,
-      });
-    }
-
     res.status(201).json({
       message: "Verification code request submitted successfully",
       request: codeRequest,

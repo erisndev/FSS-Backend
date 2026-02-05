@@ -79,22 +79,34 @@ export const applyToTender = async (req, res) => {
       return res.status(400).json({ message: "Bid amount must be a number" });
 
     // Upload application files to Supabase under tender/company folder
+    // Define label mapping for field names
+    const labelMapping = {
+      bidFileDocuments: "Bid File Documents",
+      compiledDocuments: "Compiled Documents",
+      financialDocuments: "Financial Documents",
+      technicalProposal: "Technical Proposal",
+      proofOfExperience: "Proof of Experience (Reference Letter)",
+      supportingDocuments: "Supporting Documents",
+    };
+
     let files = [];
-    if (req.files && req.files.length > 0) {
-      files = await Promise.all(
-        req.files.map(async (file) => {
+    if (req.files && Object.keys(req.files).length > 0) {
+      // req.files is now an object with field names as keys
+      for (const [fieldName, filesArray] of Object.entries(req.files)) {
+        for (const file of filesArray) {
           const url = await uploadToSupabase(
             file,
             `${tender.title}/Applications/${companyName}` // folder: uploads/<tenderName>/<companyName>/
           );
-          return {
+          files.push({
             originalName: file.originalname,
             url,
             size: file.size,
             mimeType: file.mimetype,
-          };
-        })
-      );
+            label: labelMapping[fieldName] || "Other",
+          });
+        }
+      }
     }
 
     // Create the application

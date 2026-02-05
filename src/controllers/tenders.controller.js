@@ -6,6 +6,7 @@ import { sendTenderNotificationEmail } from "../utils/emails.js";
 import { autoCloseTenders } from "../utils/tenderUtils.js";
 import { uploadToSupabase } from "../middleware/upload.js";
 import { logActivity } from "../utils/activityLogger.js";
+import { deleteFileFromSupabase } from "../config/supabase.js";
 import crypto from "crypto";
 
 // Create new tender
@@ -88,16 +89,31 @@ export const createTender = async (req, res) => {
     }
 
     // Upload documents to Supabase using tender title as folder
+    // Documents are expected to come with labels from the frontend
+    // Define label mapping for field names
+    const labelMapping = {
+      bidFileDocuments: "Bid File Documents",
+      compiledDocuments: "Compiled Documents",
+      financialDocuments: "Financial Documents",
+      technicalProposal: "Technical Proposal",
+      proofOfExperience: "Proof of Experience (Reference Letter)",
+    };
+
     let documentArray = [];
-    if (req.files && req.files.length > 0) {
-      documentArray = await Promise.all(
-        req.files.map(async (file) => ({
-          name: file.originalname,
-          url: await uploadToSupabase(file, title), // pass title as folder
-          size: file.size,
-          type: file.mimetype,
-        }))
-      );
+    if (req.files && Object.keys(req.files).length > 0) {
+      // req.files is now an object with field names as keys
+      for (const [fieldName, filesArray] of Object.entries(req.files)) {
+        for (const file of filesArray) {
+          const uploadedUrl = await uploadToSupabase(file, title);
+          documentArray.push({
+            name: file.originalname,
+            url: uploadedUrl,
+            size: file.size,
+            type: file.mimetype,
+            label: labelMapping[fieldName] || "Other",
+          });
+        }
+      }
     }
 
     const tender = await Tender.create({
@@ -259,32 +275,86 @@ export const updateTender = async (req, res) => {
     tender.tags = parseArray(req.body.tags);
     tender.requirements = parseArray(req.body.requirements);
 
-    // Documents
-    const existingDocs = req.body.existingDocuments
-      ? (typeof req.body.existingDocuments === "string"
+    // Documents - Handle existing documents
+    let existingDocs = [];
+    
+    console.log("[updateTender] Processing documents...");
+    console.log("[updateTender] req.body.existingDocuments:", req.body.existingDocuments);
+    console.log("[updateTender] req.files:", req.files ? Object.keys(req.files) : "none");
+    console.log("[updateTender] Current tender.documents count:", tender.documents?.length || 0);
+    
+    if (req.body.existingDocuments) {
+      // If existingDocuments is provided, use only those
+      try {
+        let parsedData = typeof req.body.existingDocuments === "string"
           ? JSON.parse(req.body.existingDocuments)
-          : req.body.existingDocuments
-        ).map(
+          : req.body.existingDocuments;
+        
+        console.log("[updateTender] Parsed existingDocuments:", parsedData);
+        
+        // Handle both array format ["url1", "url2"] and object format {field: "url"}
+        let existingUrls = [];
+        if (Array.isArray(parsedData)) {
+          existingUrls = parsedData;
+        } else if (typeof parsedData === 'object' && parsedData !== null) {
+          // Convert object to array of URLs
+          existingUrls = Object.values(parsedData).filter(url => url && typeof url === 'string');
+        }
+        
+        console.log("[updateTender] Extracted URLs:", existingUrls);
+        
+        existingDocs = existingUrls.map(
           (url) =>
             tender.documents.find((d) => d.url === url) || {
               name: url.split("/").pop(),
               url,
               size: 0,
               type: "application/octet-stream",
+              label: "Other",
             }
-        )
-      : [];
+        );
+        
+        console.log("[updateTender] Existing docs to keep:", existingDocs.length);
+      } catch (e) {
+        console.error("[updateTender] Error parsing existingDocuments:", e);
+        existingDocs = tender.documents || [];
+      }
+    } else if (!req.files || Object.keys(req.files).length === 0) {
+      // If no new files and no existingDocuments specified, keep all existing documents
+      console.log("[updateTender] No new files, keeping all existing documents");
+      existingDocs = tender.documents || [];
+    }
+    // If new files are uploaded but no existingDocuments specified, keep all existing documents
+    else {
+      console.log("[updateTender] New files uploaded, keeping all existing documents");
+      existingDocs = tender.documents || [];
+    }
 
-    const newDocs = req.files
-      ? await Promise.all(
-          req.files.map(async (f) => ({
-            name: f.originalname,
-            url: await uploadToSupabase(f, tender.title), // use current tender title
-            size: f.size,
-            type: f.mimetype,
-          }))
-        )
-      : [];
+    // Define label mapping for field names
+    const labelMapping = {
+      bidFileDocuments: "Bid File Documents",
+      compiledDocuments: "Compiled Documents",
+      financialDocuments: "Financial Documents",
+      technicalProposal: "Technical Proposal",
+      proofOfExperience: "Proof of Experience (Reference Letter)",
+    };
+
+    let newDocs = [];
+    if (req.files && Object.keys(req.files).length > 0) {
+      // req.files is now an object with field names as keys
+      for (const [fieldName, filesArray] of Object.entries(req.files)) {
+        for (const file of filesArray) {
+          const uploadedUrl = await uploadToSupabase(file, tender.title);
+          newDocs.push({
+            name: file.originalname,
+            url: uploadedUrl,
+            size: file.size,
+            type: file.mimetype,
+            label: labelMapping[fieldName] || "Other",
+          });
+        }
+      }
+    }
 
     tender.documents = [...existingDocs, ...newDocs];
 
@@ -398,31 +468,7 @@ export const deleteTender = async (req, res) => {
     if (tender.documents && tender.documents.length > 0) {
       console.log("[deleteTender] Deleting documents from Supabase...");
       for (const doc of tender.documents) {
-        try {
-          const filePath = doc.url.split("/uploads/")[1]; // parse path from public URL
-          if (filePath) {
-            const { error } = await supabase.storage
-              .from("tenderDocs")
-              .remove([`uploads/${filePath}`]);
-            if (error)
-              console.error(
-                "[deleteTender] Error deleting file:",
-                doc.name,
-                error.message
-              );
-            else
-              console.log(
-                "[deleteTender] Deleted file from Supabase:",
-                doc.name
-              );
-          }
-        } catch (err) {
-          console.error(
-            "[deleteTender] Error parsing/deleting file:",
-            doc.name,
-            err.message
-          );
-        }
+        await deleteFileFromSupabase(doc.url);
       }
     }
 

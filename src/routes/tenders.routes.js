@@ -21,14 +21,26 @@ router.post(
   "/",
   protect,
   authorize("issuer", "admin"),
-  upload.array("documents"), // <-- multiple files
+  upload.fields([
+    { name: "bidFileDocuments", maxCount: 1 },
+    { name: "compiledDocuments", maxCount: 1 },
+    { name: "financialDocuments", maxCount: 1 },
+    { name: "technicalProposal", maxCount: 1 },
+    { name: "proofOfExperience", maxCount: 1 },
+  ]),
   createTender
 );
 router.put(
   "/:id",
   protect,
   authorize("issuer", "admin"),
-  upload.array("documents"), // <-- multiple files
+  upload.fields([
+    { name: "bidFileDocuments", maxCount: 1 },
+    { name: "compiledDocuments", maxCount: 1 },
+    { name: "financialDocuments", maxCount: 1 },
+    { name: "technicalProposal", maxCount: 1 },
+    { name: "proofOfExperience", maxCount: 1 },
+  ]),
   updateTender
 );
 router.delete("/:id", protect, authorize("issuer", "admin"), deleteTender);
