@@ -70,7 +70,8 @@ export const register = async (req, res) => {
     // Generate OTP for email verification
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.emailOTP = otp;
-    user.emailOTPExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+    user.emailOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
     await user.save({ validateBeforeSave: false });
 
     await Notification.create({
@@ -112,11 +113,12 @@ export const verifyRegisterOTP = async (req, res) => {
     if (
       !user.emailOTP ||
       String(user.emailOTP).trim() !== String(otp).trim() ||
-      user.emailOTPExpires < Date.now()
-    )
+      user.emailOTPExpires < new Date()
+    ) {
       return res
         .status(400)
         .json({ message: "Invalid or expired registration OTP" });
+    }
 
     user.emailVerified = true;
     user.emailOTP = undefined;
@@ -167,11 +169,12 @@ export const verifyResetOTP = async (req, res) => {
     if (
       !user.resetPasswordOTP ||
       String(user.resetPasswordOTP).trim() !== String(otp).trim() ||
-      user.resetPasswordOTPExpires < Date.now()
-    )
+      user.resetPasswordOTPExpires < new Date()
+    ) {
       return res
         .status(400)
         .json({ message: "Invalid or expired password reset OTP" });
+    }
 
     await user.save();
 
@@ -322,14 +325,14 @@ export const changePassword = async (req, res) => {
     const { currentPassword, newPassword } = req.body;
 
     if (!currentPassword || !newPassword) {
-      return res.status(400).json({ 
-        message: "Current password and new password are required" 
+      return res.status(400).json({
+        message: "Current password and new password are required",
       });
     }
 
     if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        message: "New password must be at least 6 characters long" 
+      return res.status(400).json({
+        message: "New password must be at least 6 characters long",
       });
     }
 
@@ -366,7 +369,7 @@ export const changePassword = async (req, res) => {
 export const getAllUsers = async (req, res) => {
   try {
     const users = await User.find().select(
-      "-password -emailOTP -resetPasswordOTP"
+      "-password -emailOTP -resetPasswordOTP",
     );
     res.json(users);
   } catch (err) {
@@ -378,7 +381,7 @@ export const getAllUsers = async (req, res) => {
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select(
-      "-password -emailOTP -resetPasswordOTP"
+      "-password -emailOTP -resetPasswordOTP",
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.json(user);
@@ -441,7 +444,7 @@ export const requestPasswordReset = async (req, res) => {
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.resetPasswordOTP = otp;
-    user.resetPasswordOTPExpires = Date.now() + 10 * 60 * 1000; // 10 mins
+    user.resetPasswordOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
     await user.save({ validateBeforeSave: false });
 
     await sendResetPasswordOTPEmail(user, otp);
@@ -489,7 +492,7 @@ export const resendRegisterOTP = async (req, res) => {
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.emailOTP = otp;
-    user.emailOTPExpires = Date.now() + 10 * 60 * 1000; // 10 mins
+    user.emailOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
     await user.save({ validateBeforeSave: false });
 
     await sendRegisterOTPEmail(user, otp);
@@ -509,7 +512,7 @@ export const resendPasswordResetOTP = async (req, res) => {
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.resetPasswordOTP = otp;
-    user.resetPasswordOTPExpires = Date.now() + 10 * 60 * 1000; // 10 mins
+    user.resetPasswordOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
     await user.save({ validateBeforeSave: false });
 
     await sendResetPasswordOTPEmail(user, otp);

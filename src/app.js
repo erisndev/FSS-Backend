@@ -36,6 +36,8 @@ const app = express();
 connectDB();
 
 // ---------------- Security Middleware ----------------
+app.set("trust proxy", 1);
+
 app.use(
   helmet({
     contentSecurityPolicy: process.env.NODE_ENV === "production",
