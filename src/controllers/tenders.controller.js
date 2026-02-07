@@ -312,34 +312,88 @@ export const updateTender = async (req, res) => {
       }
     }
 
-    const fieldsToUpdate = [
-      "title",
-      "description",
-      "category",
-      "budgetMin",
-      "budgetMax",
-      "deadline",
-      "status",
-      "isUrgent",
-      "companyName",
-      "contactPerson",
-      "contactEmail",
-      "contactPhone",
-    ];
+    const {
+      title,
+      description,
+      category,
+      budgetMin,
+      budgetMax,
+      deadline,
+      requirements,
+      isUrgent,
+      tags,
 
-    fieldsToUpdate.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        if (field === "budgetMin" || field === "budgetMax")
-          tender[field] = Number(req.body[field]);
-        else if (field === "deadline")
-          tender[field] = new Date(req.body[field]);
-        else if (field === "isUrgent") tender[field] = !!req.body[field];
-        else tender[field] = req.body[field];
-      }
-    });
+      companyName,
+      companyAddress,
 
-    // Tags & requirements
+      technicalContactPerson,
+      technicalContactEmail,
+      technicalContactPhone,
+
+      generalContactPerson,
+      generalContactEmail,
+      generalContactPhone,
+
+      // Legacy fields (still accepted)
+      contactEmail,
+      contactPerson,
+      contactPhone,
+
+      status,
+    } = req.body;
+
+    // Mirror createTender behavior:
+    // - required fields enforced only when status is not draft
+    // - allow partial updates, but if switching to active, ensure requireds exist
+    const effectiveStatus = status ?? tender.status ?? "active";
+
+    if (status !== undefined) {
+      tender.status = effectiveStatus;
+    }
+
+    // Update scalar fields if provided (keep existing otherwise)
+    if (title !== undefined) tender.title = title;
+    if (description !== undefined) tender.description = description;
+    if (category !== undefined) tender.category = category;
+    if (deadline !== undefined)
+      tender.deadline = deadline ? new Date(deadline) : undefined;
+
+    if (budgetMin !== undefined) {
+      tender.budgetMin =
+        budgetMin !== null && budgetMin !== "" ? Number(budgetMin) : undefined;
+    }
+    if (budgetMax !== undefined) {
+      tender.budgetMax =
+        budgetMax !== null && budgetMax !== "" ? Number(budgetMax) : undefined;
+    }
+
+    if (isUrgent !== undefined) tender.isUrgent = !!isUrgent;
+
+    if (companyName !== undefined) tender.companyName = companyName;
+    if (companyAddress !== undefined) tender.companyAddress = companyAddress;
+
+    if (technicalContactPerson !== undefined)
+      tender.technicalContactPerson = technicalContactPerson;
+    if (technicalContactEmail !== undefined)
+      tender.technicalContactEmail = technicalContactEmail;
+    if (technicalContactPhone !== undefined)
+      tender.technicalContactPhone = technicalContactPhone;
+
+    if (generalContactPerson !== undefined)
+      tender.generalContactPerson = generalContactPerson;
+    if (generalContactEmail !== undefined)
+      tender.generalContactEmail = generalContactEmail;
+    if (generalContactPhone !== undefined)
+      tender.generalContactPhone = generalContactPhone;
+
+    // Legacy contact fields: keep accepting but also keep contactEmail/Phone aligned
+    if (contactPerson !== undefined) tender.contactPerson = contactPerson;
+    if (contactEmail !== undefined) tender.contactEmail = contactEmail;
+    if (contactPhone !== undefined) tender.contactPhone = contactPhone;
+
+    // Parse tags / requirements like createTender, but only if provided
     const parseArray = (raw) => {
+      if (raw === undefined) return undefined;
       if (!raw) return [];
       if (Array.isArray(raw)) return raw;
       if (typeof raw === "string") {
@@ -351,65 +405,60 @@ export const updateTender = async (req, res) => {
       }
       return [];
     };
-    tender.tags = parseArray(req.body.tags);
-    tender.requirements = parseArray(req.body.requirements);
 
-    // Documents - Handle existing documents
-    let existingDocs = [];
-    
-    console.log("[updateTender] Processing documents...");
-    console.log("[updateTender] req.body.existingDocuments:", req.body.existingDocuments);
-    console.log("[updateTender] req.files:", req.files ? Object.keys(req.files) : "none");
-    console.log("[updateTender] Current tender.documents count:", tender.documents?.length || 0);
-    
-    if (req.body.existingDocuments) {
-      // If existingDocuments is provided, use only those
-      try {
-        let parsedData = typeof req.body.existingDocuments === "string"
-          ? JSON.parse(req.body.existingDocuments)
-          : req.body.existingDocuments;
-        
-        console.log("[updateTender] Parsed existingDocuments:", parsedData);
-        
-        // Handle both array format ["url1", "url2"] and object format {field: "url"}
-        let existingUrls = [];
-        if (Array.isArray(parsedData)) {
-          existingUrls = parsedData;
-        } else if (typeof parsedData === 'object' && parsedData !== null) {
-          // Convert object to array of URLs
-          existingUrls = Object.values(parsedData).filter(url => url && typeof url === 'string');
-        }
-        
-        console.log("[updateTender] Extracted URLs:", existingUrls);
-        
-        existingDocs = existingUrls.map(
-          (url) =>
-            tender.documents.find((d) => d.url === url) || {
-              name: url.split("/").pop(),
-              url,
-              size: 0,
-              type: "application/octet-stream",
-              label: "Other",
-            }
-        );
-        
-        console.log("[updateTender] Existing docs to keep:", existingDocs.length);
-      } catch (e) {
-        console.error("[updateTender] Error parsing existingDocuments:", e);
-        existingDocs = tender.documents || [];
+    const tagsArray = parseArray(tags);
+    if (tagsArray !== undefined) tender.tags = tagsArray;
+
+    const requirementsArray = parseArray(requirements);
+    if (requirementsArray !== undefined) tender.requirements = requirementsArray;
+
+    // Ensure legacy contactEmail/contactPhone defaults match createTender behavior
+    // only if client is updating any of the related contact fields
+    const touchedLegacyContact =
+      contactEmail !== undefined ||
+      contactPhone !== undefined ||
+      generalContactEmail !== undefined ||
+      generalContactPhone !== undefined ||
+      technicalContactEmail !== undefined ||
+      technicalContactPhone !== undefined;
+
+    if (touchedLegacyContact) {
+      tender.contactEmail =
+        tender.contactEmail || tender.generalContactEmail || tender.technicalContactEmail;
+      tender.contactPhone =
+        tender.contactPhone || tender.generalContactPhone || tender.technicalContactPhone;
+    }
+
+    // If moving out of draft (or ensuring non-draft), enforce required fields
+    if (effectiveStatus !== "draft") {
+      const missing =
+        !tender.title ||
+        !tender.description ||
+        !tender.category ||
+        !tender.deadline ||
+        !tender.companyName;
+
+      if (missing) {
+        return res.status(400).json({ message: "Missing required fields" });
       }
-    } else if (!req.files || Object.keys(req.files).length === 0) {
-      // If no new files and no existingDocuments specified, keep all existing documents
-      console.log("[updateTender] No new files, keeping all existing documents");
-      existingDocs = tender.documents || [];
-    }
-    // If new files are uploaded but no existingDocuments specified, keep all existing documents
-    else {
-      console.log("[updateTender] New files uploaded, keeping all existing documents");
-      existingDocs = tender.documents || [];
     }
 
-    // Define label mapping for field names
+    // Documents: align with createTender normalized object + legacy array in _legacy
+    const documentFields = [
+      "bidFileDocuments",
+      "compiledDocuments",
+      "financialDocuments",
+      "technicalProposal",
+      "proofOfExperience",
+    ];
+
+    const normalizeFile = (file, url) => ({
+      url,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+    });
+
     const labelMapping = {
       bidFileDocuments: "Bid File Documents",
       compiledDocuments: "Compiled Documents",
@@ -418,24 +467,162 @@ export const updateTender = async (req, res) => {
       proofOfExperience: "Proof of Experience (Reference Letter)",
     };
 
-    let newDocs = [];
+    // Current tender.documents can be either the new object format or legacy array.
+    const currentDocuments = tender.documents;
+    const currentNormalizedObject =
+      currentDocuments && !Array.isArray(currentDocuments)
+        ? currentDocuments
+        : {
+            bidFileDocuments: null,
+            compiledDocuments: null,
+            financialDocuments: null,
+            technicalProposal: null,
+            proofOfExperience: null,
+          };
+
+    const currentLegacyArray = Array.isArray(currentDocuments)
+      ? currentDocuments
+      : Array.isArray(currentDocuments?._legacy)
+        ? currentDocuments._legacy
+        : [];
+
+    // Decide which existing docs to keep based on req.body.existingDocuments
+    // Accepts array of URLs or object map of field->url.
+    // If omitted: keep existing
+    let keepUrls = null;
+    if (req.body.existingDocuments !== undefined) {
+      try {
+        const parsed =
+          typeof req.body.existingDocuments === "string"
+            ? JSON.parse(req.body.existingDocuments)
+            : req.body.existingDocuments;
+
+        if (Array.isArray(parsed)) {
+          keepUrls = parsed.filter((u) => typeof u === "string");
+        } else if (parsed && typeof parsed === "object") {
+          keepUrls = Object.values(parsed).filter(
+            (u) => u && typeof u === "string"
+          );
+        } else {
+          keepUrls = [];
+        }
+      } catch {
+        keepUrls = null; // fall back to keep all
+      }
+    }
+
+    const shouldKeepUrl = (url) => {
+      if (!url) return false;
+      if (keepUrls === null) return true;
+      return keepUrls.includes(url);
+    };
+
+    // Build kept normalized object by filtering urls
+    const keptDocumentsObject = {
+      bidFileDocuments:
+        currentNormalizedObject.bidFileDocuments &&
+        shouldKeepUrl(currentNormalizedObject.bidFileDocuments.url)
+          ? currentNormalizedObject.bidFileDocuments
+          : null,
+      compiledDocuments:
+        currentNormalizedObject.compiledDocuments &&
+        shouldKeepUrl(currentNormalizedObject.compiledDocuments.url)
+          ? currentNormalizedObject.compiledDocuments
+          : null,
+      financialDocuments:
+        currentNormalizedObject.financialDocuments &&
+        shouldKeepUrl(currentNormalizedObject.financialDocuments.url)
+          ? currentNormalizedObject.financialDocuments
+          : null,
+      technicalProposal:
+        currentNormalizedObject.technicalProposal &&
+        shouldKeepUrl(currentNormalizedObject.technicalProposal.url)
+          ? currentNormalizedObject.technicalProposal
+          : null,
+      proofOfExperience:
+        currentNormalizedObject.proofOfExperience &&
+        shouldKeepUrl(currentNormalizedObject.proofOfExperience.url)
+          ? currentNormalizedObject.proofOfExperience
+          : null,
+    };
+
+    const keptLegacyArray = currentLegacyArray.filter((d) =>
+      shouldKeepUrl(d?.url)
+    );
+
+    // Upload new docs
+    const uploadedNormalized = {
+      bidFileDocuments: null,
+      compiledDocuments: null,
+      financialDocuments: null,
+      technicalProposal: null,
+      proofOfExperience: null,
+    };
+
+    let uploadedLegacyArray = [];
+
+    const uploadFolder = tender.title || title || "tender";
+
     if (req.files && Object.keys(req.files).length > 0) {
-      // req.files is now an object with field names as keys
+      // Known typed fields: store both normalized object + legacy array
+      for (const fieldName of documentFields) {
+        const filesArray = req.files[fieldName];
+        if (!filesArray || filesArray.length === 0) continue;
+
+        const file = filesArray[0];
+        const uploadedUrl = await uploadToSupabase(file, uploadFolder);
+
+        uploadedNormalized[fieldName] = normalizeFile(file, uploadedUrl);
+
+        uploadedLegacyArray.push({
+          name: file.originalname,
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          type: file.mimetype,
+          url: uploadedUrl,
+          label: labelMapping[fieldName] || "Other",
+        });
+      }
+
+      // Unknown extra fields: still upload and store in legacy array
       for (const [fieldName, filesArray] of Object.entries(req.files)) {
+        if (documentFields.includes(fieldName)) continue;
         for (const file of filesArray) {
-          const uploadedUrl = await uploadToSupabase(file, tender.title);
-          newDocs.push({
+          const uploadedUrl = await uploadToSupabase(file, uploadFolder);
+          uploadedLegacyArray.push({
             name: file.originalname,
-            url: uploadedUrl,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
             size: file.size,
             type: file.mimetype,
+            url: uploadedUrl,
             label: labelMapping[fieldName] || "Other",
           });
         }
       }
     }
 
-    tender.documents = [...existingDocs, ...newDocs];
+    // Merge documents: new uploads replace typed fields; legacy arrays are concatenated
+    const mergedDocumentsObject = {
+      bidFileDocuments:
+        uploadedNormalized.bidFileDocuments ?? keptDocumentsObject.bidFileDocuments,
+      compiledDocuments:
+        uploadedNormalized.compiledDocuments ?? keptDocumentsObject.compiledDocuments,
+      financialDocuments:
+        uploadedNormalized.financialDocuments ?? keptDocumentsObject.financialDocuments,
+      technicalProposal:
+        uploadedNormalized.technicalProposal ?? keptDocumentsObject.technicalProposal,
+      proofOfExperience:
+        uploadedNormalized.proofOfExperience ?? keptDocumentsObject.proofOfExperience,
+    };
+
+    const mergedLegacyArray = [...keptLegacyArray, ...uploadedLegacyArray];
+
+    tender.documents =
+      mergedLegacyArray.length > 0
+        ? { ...mergedDocumentsObject, _legacy: mergedLegacyArray }
+        : mergedDocumentsObject;
 
     const updatedTender = await tender.save();
 
