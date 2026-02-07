@@ -29,14 +29,31 @@ const tenderSchema = new mongoose.Schema(
     isUrgent: { type: Boolean, default: false },
     tags: { type: [String], default: [] },
     requirements: { type: [String], default: [] },
+
+    // Company
     companyName: { type: String, required: true },
-    registrationNumber: { type: String },
-    bbeeLevel: { type: String },
-    cidbGrading: { type: String },
+    companyAddress: { type: String },
+
+    
+    // Contacts (new frontend payload)
+    technicalContactPerson: { type: String },
+    technicalContactEmail: { type: String },
+    technicalContactPhone: { type: String },
+    generalContactPerson: { type: String },
+    generalContactEmail: { type: String },
+    generalContactPhone: { type: String },
+
+    // Legacy single contact fields (kept for backward compatibility)
     contactPerson: { type: String },
-    contactEmail: { type: String, required: true },
+    contactEmail: { type: String },
     contactPhone: { type: String },
-    documents: [fileSchema],
+
+    // Documents can be stored as an array (legacy) OR as a normalized object
+    documents: {
+      type: mongoose.Schema.Types.Mixed,
+      default: [],
+    },
+
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

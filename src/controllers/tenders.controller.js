@@ -37,31 +37,41 @@ export const createTender = async (req, res) => {
       title,
       description,
       category,
-      deadline,
-      companyName,
-      contactEmail,
       budgetMin,
       budgetMax,
-      tags,
+      deadline,
       requirements,
       isUrgent,
-      registrationNumber,
-      bbeeLevel,
-      cidbGrading,
+      tags,
+
+      companyName,
+      companyAddress,
+
+      technicalContactPerson,
+      technicalContactEmail,
+      technicalContactPhone,
+
+      generalContactPerson,
+      generalContactEmail,
+      generalContactPhone,
+
+      // Legacy fields (still accepted)
+      contactEmail,
       contactPerson,
       contactPhone,
+
       status,
     } = req.body;
 
-    if (
-      !title ||
-      !description ||
-      !category ||
-      !deadline ||
-      !companyName ||
-      !contactEmail
-    ) {
-      return res.status(400).json({ message: "Missing required fields" });
+    // Required fields policy:
+    // - active: enforce required fields
+    // - draft: allow missing non-critical fields
+    const effectiveStatus = status || "active";
+
+    if (effectiveStatus !== "draft") {
+      if (!title || !description || !category || !deadline || !companyName) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
     }
 
     // Parse tags
@@ -89,8 +99,32 @@ export const createTender = async (req, res) => {
     }
 
     // Upload documents to Supabase using tender title as folder
-    // Documents are expected to come with labels from the frontend
-    // Define label mapping for field names
+    // Expected form-data file fields:
+    // - bidFileDocuments, compiledDocuments, financialDocuments, technicalProposal, proofOfExperience
+    const documentFields = [
+      "bidFileDocuments",
+      "compiledDocuments",
+      "financialDocuments",
+      "technicalProposal",
+      "proofOfExperience",
+    ];
+
+    const normalizeFile = (file, url) => ({
+      url,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+    });
+
+    const documentsObject = {
+      bidFileDocuments: null,
+      compiledDocuments: null,
+      financialDocuments: null,
+      technicalProposal: null,
+      proofOfExperience: null,
+    };
+
+    // Also build legacy array format for backward compatibility
     const labelMapping = {
       bidFileDocuments: "Bid File Documents",
       compiledDocuments: "Compiled Documents",
@@ -100,16 +134,42 @@ export const createTender = async (req, res) => {
     };
 
     let documentArray = [];
+
     if (req.files && Object.keys(req.files).length > 0) {
-      // req.files is now an object with field names as keys
+      for (const fieldName of documentFields) {
+        const filesArray = req.files[fieldName];
+        if (!filesArray || filesArray.length === 0) continue;
+
+        // Frontend currently uploads at most one per field; keep the first
+        const file = filesArray[0];
+        const uploadedUrl = await uploadToSupabase(file, title);
+
+        documentsObject[fieldName] = normalizeFile(file, uploadedUrl);
+
+        // legacy array
+        documentArray.push({
+          name: file.originalname,
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          type: file.mimetype,
+          url: uploadedUrl,
+          label: labelMapping[fieldName] || "Other",
+        });
+      }
+
+      // If unknown additional fields are sent, still upload them and keep in legacy array
       for (const [fieldName, filesArray] of Object.entries(req.files)) {
+        if (documentFields.includes(fieldName)) continue;
         for (const file of filesArray) {
           const uploadedUrl = await uploadToSupabase(file, title);
           documentArray.push({
             name: file.originalname,
-            url: uploadedUrl,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
             size: file.size,
             type: file.mimetype,
+            url: uploadedUrl,
             label: labelMapping[fieldName] || "Other",
           });
         }
@@ -120,21 +180,43 @@ export const createTender = async (req, res) => {
       title,
       description,
       category,
-      deadline: new Date(deadline),
-      budgetMin: budgetMin ? Number(budgetMin) : undefined,
-      budgetMax: budgetMax ? Number(budgetMax) : undefined,
+      deadline: deadline ? new Date(deadline) : undefined,
+      budgetMin:
+        budgetMin !== undefined && budgetMin !== null && budgetMin !== ""
+          ? Number(budgetMin)
+          : undefined,
+      budgetMax:
+        budgetMax !== undefined && budgetMax !== null && budgetMax !== ""
+          ? Number(budgetMax)
+          : undefined,
       isUrgent: !!isUrgent,
       tags: tagsArray,
       requirements: requirementsArray,
+
       companyName,
-      registrationNumber,
-      bbeeLevel,
-      cidbGrading,
+      companyAddress,
+
+      technicalContactPerson,
+      technicalContactEmail,
+      technicalContactPhone,
+      generalContactPerson,
+      generalContactEmail,
+      generalContactPhone,
+
+      // Legacy fields
       contactPerson,
-      contactEmail,
-      contactPhone,
-      status: status || "active",
-      documents: documentArray,
+      contactEmail: contactEmail || generalContactEmail || technicalContactEmail,
+      contactPhone: contactPhone || generalContactPhone || technicalContactPhone,
+
+      status: effectiveStatus,
+
+      // New response contract expects a normalized documents object.
+      // Keep legacy array in `_legacy` for older clients.
+      documents:
+        documentArray.length > 0
+          ? { ...documentsObject, _legacy: documentArray }
+          : documentsObject,
+
       createdBy: req.user._id,
       organization: req.user.organizationId || null, // Set organization if user belongs to one
       verificationCode: crypto.randomBytes(4).toString("hex").toUpperCase(),
@@ -240,9 +322,6 @@ export const updateTender = async (req, res) => {
       "status",
       "isUrgent",
       "companyName",
-      "registrationNumber",
-      "bbeeLevel",
-      "cidbGrading",
       "contactPerson",
       "contactEmail",
       "contactPhone",
