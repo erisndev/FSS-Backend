@@ -4,14 +4,14 @@ import { supabase } from "../config/supabase.js";
 
 // Allowed file types
 const ALLOWED_FILE_TYPES = [
-  'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'image/jpeg',
-  'image/png',
-  'image/jpg'
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "image/jpeg",
+  "image/png",
+  "image/jpg",
 ];
 
 // File size limit (10MB)
@@ -22,20 +22,25 @@ const fileFilter = (req, file, cb) => {
   if (ALLOWED_FILE_TYPES.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type. Only PDF, Word, Excel, and images are allowed.'), false);
+    cb(
+      new Error(
+        "Invalid file type. Only PDF, Word, Excel, and images are allowed.",
+      ),
+      false,
+    );
   }
 };
 
 // Configure Multer with memory storage and validation
 const storage = multer.memoryStorage();
 
-export const upload = multer({ 
+export const upload = multer({
   storage,
   fileFilter,
   limits: {
     fileSize: MAX_FILE_SIZE,
-    files: 10 // Maximum 10 files per request
-  }
+    files: 20,
+  },
 });
 
 // Upload file to Supabase Storage
@@ -44,7 +49,7 @@ export const uploadToSupabase = async (file, tenderName = "general") => {
     "[uploadToSupabase] Starting upload for file:",
     file.originalname,
     "under tender:",
-    tenderName
+    tenderName,
   );
   const fileExt = path.extname(file.originalname);
   const fileName = `${Date.now()}-${file.originalname}`;
@@ -67,7 +72,7 @@ export const uploadToSupabase = async (file, tenderName = "general") => {
 
   console.log(
     "[uploadToSupabase] Upload successful. Public URL:",
-    publicUrl.publicUrl
+    publicUrl.publicUrl,
   );
   return publicUrl.publicUrl;
 };

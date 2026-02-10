@@ -48,9 +48,9 @@ const tenderSchema = new mongoose.Schema(
     contactEmail: { type: String },
     contactPhone: { type: String },
 
-    // Documents can be stored as an array (legacy) OR as a normalized object
+    // Tender documents (issuer issued docs)
     documents: {
-      type: mongoose.Schema.Types.Mixed,
+      type: [fileSchema],
       default: [],
     },
 

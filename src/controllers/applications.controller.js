@@ -78,32 +78,143 @@ export const applyToTender = async (req, res) => {
     if (isNaN(bidAmountNumber))
       return res.status(400).json({ message: "Bid amount must be a number" });
 
-    // Upload application files to Supabase under tender/company folder
-    // Define label mapping for field names
-    const labelMapping = {
-      bidFileDocuments: "Bid File Documents",
-      compiledDocuments: "Compiled Documents",
-      financialDocuments: "Financial Documents",
-      technicalProposal: "Technical Proposal",
-      proofOfExperience: "Proof of Experience (Reference Letter)",
-      supportingDocuments: "Supporting Documents",
+    // Upload application compliance documents to Supabase under tender/company folder
+    // Stored in DB as array of { label, url, originalName, mimeType, size }
+    // Accept canonical keys + common frontend variants
+    const fieldAliases = {
+      taxClearance: ["taxClearance", "tax_clearance", "Tax Clearance / Tax Pin from SARS"],
+      csd: ["csd", "CSD"],
+      bbbee: ["bbbee", "bbbEE", "BBBEE", "BBBEE Certificate / Sworn Affidavit"],
+      proofOfBusinessAddress: [
+        "proofOfBusinessAddress",
+        "proof_business_address",
+        "Proof of Business Address",
+      ],
+      sbd1: ["sbd1", "SBD 1"],
+      sbd2: ["sbd2", "SBD 2"],
+      sbd4: ["sbd4", "SBD 4"],
+      sbd61: ["sbd61", "sbd6_1", "SBD 6.1"],
+      bidTechnicalSubmission: [
+        "bidTechnicalSubmission",
+        "Bid Technical Submission",
+      ],
+      bidFinancialSubmission: [
+        "bidFinancialSubmission",
+        "Bid Financial Submission",
+      ],
+      cipcDocuments: ["cipcDocuments", "CIPC Documents"],
+      certifiedIdCopies: [
+        "certifiedIdCopies",
+        "Certified ID Copies of all directors",
+      ],
+      companyExperience: [
+        "companyExperience",
+        "Company Experience / References (20)",
+      ],
+      qualificationsSkillsKnowledge: [
+        "qualificationsSkillsKnowledge",
+        "Appropriate Qualifications, Skills, Knowledge (Attach Full CVs) (20)",
+      ],
+      proposedProjectPlan: [
+        "proposedProjectPlan",
+        "Proposed Project Plan & Scope of Work (30)",
+      ],
+      approachAndMethodology: [
+        "approachAndMethodology",
+        "Approach and Methodology (30)",
+      ],
     };
 
-    let files = [];
-    if (req.files && Object.keys(req.files).length > 0) {
-      // req.files is now an object with field names as keys
-      for (const [fieldName, filesArray] of Object.entries(req.files)) {
+    const complianceFields = Object.keys(fieldAliases);
+
+    const labelMapping = {
+      taxClearance: "Tax Clearance / Tax Pin from SARS",
+      csd: "CSD",
+      bbbee: "BBBEE Certificate / Sworn Affidavit",
+      proofOfBusinessAddress: "Proof of Business Address",
+      sbd1: "SBD 1",
+      sbd2: "SBD 2",
+      sbd4: "SBD 4",
+      sbd61: "SBD 6.1",
+      bidTechnicalSubmission: "Bid Technical Submission",
+      bidFinancialSubmission: "Bid Financial Submission",
+      cipcDocuments: "CIPC Documents",
+      certifiedIdCopies: "Certified ID Copies of all directors",
+      companyExperience: "Company Experience / References (20)",
+      qualificationsSkillsKnowledge:
+        "Appropriate Qualifications, Skills, Knowledge (Attach Full CVs) (20)",
+      proposedProjectPlan: "Proposed Project Plan & Scope of Work (30)",
+      approachAndMethodology: "Approach and Methodology (30)",
+    };
+
+    const normalizeDoc = (file, url, fieldName) => ({
+      label: labelMapping[fieldName],
+      url,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+    });
+
+    let complianceDocuments = [];
+
+    // With upload.any(), req.files is an array of files with a .fieldname
+    // With upload.fields(), req.files is an object keyed by fieldname
+    const filesByField = new Map();
+    if (Array.isArray(req.files)) {
+      for (const f of req.files) {
+        if (!filesByField.has(f.fieldname)) filesByField.set(f.fieldname, []);
+        filesByField.get(f.fieldname).push(f);
+      }
+    } else if (req.files && typeof req.files === "object") {
+      for (const [k, arr] of Object.entries(req.files)) {
+        filesByField.set(k, arr);
+      }
+    }
+
+    const getFilesForCanonicalField = (canonicalField) => {
+      const aliases = fieldAliases[canonicalField] || [canonicalField];
+      for (const key of aliases) {
+        const files = filesByField.get(key);
+        if (files && files.length) return files;
+      }
+      return null;
+    };
+
+    if (filesByField.size > 0) {
+      // First, upload known required documents (using aliases)
+      for (const canonicalField of complianceFields) {
+        const filesArray = getFilesForCanonicalField(canonicalField);
+        if (!filesArray || filesArray.length === 0) continue;
+
         for (const file of filesArray) {
           const url = await uploadToSupabase(
             file,
-            `${tender.title}/Applications/${companyName}` // folder: uploads/<tenderName>/<companyName>/
+            `${tender.title}/Applications/${companyName}`
           );
-          files.push({
-            originalName: file.originalname,
+          complianceDocuments.push(normalizeDoc(file, url, canonicalField));
+        }
+      }
+
+      // Then, if the frontend sent extra fields, still persist them (so nothing is lost)
+      const knownAliasSet = new Set(
+        Object.values(fieldAliases).flat().map((s) => String(s))
+      );
+
+      for (const [fieldName, filesArray] of filesByField.entries()) {
+        if (knownAliasSet.has(fieldName)) continue;
+        if (!filesArray || filesArray.length === 0) continue;
+
+        for (const file of filesArray) {
+          const url = await uploadToSupabase(
+            file,
+            `${tender.title}/Applications/${companyName}`
+          );
+          complianceDocuments.push({
+            label: String(fieldName),
             url,
-            size: file.size,
+            originalName: file.originalname,
             mimeType: file.mimetype,
-            label: labelMapping[fieldName] || "Other",
+            size: file.size,
           });
         }
       }
@@ -123,7 +234,7 @@ export const applyToTender = async (req, res) => {
       bidAmount: bidAmountNumber,
       timeframe,
       message,
-      files,
+      complianceDocuments,
     });
 
     // Push application ID to tender

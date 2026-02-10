@@ -39,7 +39,7 @@ const applicationSchema = new mongoose.Schema(
       default: "pending",
     },
     comment: { type: String },
-    files: [fileSchema],
+    complianceDocuments: [fileSchema],
   },
   { timestamps: true }
 );

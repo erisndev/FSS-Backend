@@ -22,11 +22,16 @@ router.post(
   protect,
   authorize("issuer", "admin"),
   upload.fields([
-    { name: "bidFileDocuments", maxCount: 1 },
-    { name: "compiledDocuments", maxCount: 1 },
-    { name: "financialDocuments", maxCount: 1 },
-    { name: "technicalProposal", maxCount: 1 },
-    { name: "proofOfExperience", maxCount: 1 },
+    { name: "termsOfReference", maxCount: 1 },
+    { name: "sbd1", maxCount: 1 },
+    { name: "sbd2", maxCount: 1 },
+    { name: "sbd4DeclarationOfInterest", maxCount: 1 },
+    { name: "sbd61", maxCount: 1 },
+    { name: "bidTechnicalSubmissionTemplate", maxCount: 1 },
+    { name: "bidFinancialSubmissionTemplate", maxCount: 1 },
+    { name: "annexure1", maxCount: 1 },
+    { name: "annexure2", maxCount: 1 },
+    { name: "annexure3", maxCount: 1 },
   ]),
   createTender
 );
@@ -35,11 +40,16 @@ router.put(
   protect,
   authorize("issuer", "admin"),
   upload.fields([
-    { name: "bidFileDocuments", maxCount: 1 },
-    { name: "compiledDocuments", maxCount: 1 },
-    { name: "financialDocuments", maxCount: 1 },
-    { name: "technicalProposal", maxCount: 1 },
-    { name: "proofOfExperience", maxCount: 1 },
+    { name: "termsOfReference", maxCount: 1 },
+    { name: "sbd1", maxCount: 1 },
+    { name: "sbd2", maxCount: 1 },
+    { name: "sbd4DeclarationOfInterest", maxCount: 1 },
+    { name: "sbd61", maxCount: 1 },
+    { name: "bidTechnicalSubmissionTemplate", maxCount: 1 },
+    { name: "bidFinancialSubmissionTemplate", maxCount: 1 },
+    { name: "annexure1", maxCount: 1 },
+    { name: "annexure2", maxCount: 1 },
+    { name: "annexure3", maxCount: 1 },
   ]),
   updateTender
 );

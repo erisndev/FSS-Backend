@@ -98,81 +98,56 @@ export const createTender = async (req, res) => {
       } else if (Array.isArray(requirements)) requirementsArray = requirements;
     }
 
-    // Upload documents to Supabase using tender title as folder
-    // Expected form-data file fields:
-    // - bidFileDocuments, compiledDocuments, financialDocuments, technicalProposal, proofOfExperience
+    // Upload tender documents to Supabase using tender title as folder
+    // Expected form-data file fields (new frontend):
+    // - termsOfReference, sbd1, sbd2, sbd4DeclarationOfInterest, sbd61,
+    //   bidTechnicalSubmissionTemplate, bidFinancialSubmissionTemplate,
+    //   annexure1, annexure2, annexure3
+    // Stored in DB as an array of { label, url, originalName, mimeType, size }
+
     const documentFields = [
-      "bidFileDocuments",
-      "compiledDocuments",
-      "financialDocuments",
-      "technicalProposal",
-      "proofOfExperience",
+      "termsOfReference",
+      "sbd1",
+      "sbd2",
+      "sbd4DeclarationOfInterest",
+      "sbd61",
+      "bidTechnicalSubmissionTemplate",
+      "bidFinancialSubmissionTemplate",
+      "annexure1",
+      "annexure2",
+      "annexure3",
     ];
 
-    const normalizeFile = (file, url) => ({
+    const labelMapping = {
+      termsOfReference: "Terms of Reference Document",
+      sbd1: "SBD 1",
+      sbd2: "SBD 2",
+      sbd4DeclarationOfInterest: "SBD 4 Declaration of interest",
+      sbd61: "SBD 6.1",
+      bidTechnicalSubmissionTemplate: "Bid Technical Submission Template",
+      bidFinancialSubmissionTemplate: "Bid Financial Submission Template",
+      annexure1: "Annexure 1",
+      annexure2: "Annexure 2",
+      annexure3: "Annexure 3",
+    };
+
+    const normalizeDoc = (file, url, fieldName) => ({
+      label: labelMapping[fieldName],
       url,
       originalName: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
     });
 
-    const documentsObject = {
-      bidFileDocuments: null,
-      compiledDocuments: null,
-      financialDocuments: null,
-      technicalProposal: null,
-      proofOfExperience: null,
-    };
-
-    // Also build legacy array format for backward compatibility
-    const labelMapping = {
-      bidFileDocuments: "Bid File Documents",
-      compiledDocuments: "Compiled Documents",
-      financialDocuments: "Financial Documents",
-      technicalProposal: "Technical Proposal",
-      proofOfExperience: "Proof of Experience (Reference Letter)",
-    };
-
-    let documentArray = [];
-
+    let documents = [];
     if (req.files && Object.keys(req.files).length > 0) {
       for (const fieldName of documentFields) {
         const filesArray = req.files[fieldName];
         if (!filesArray || filesArray.length === 0) continue;
 
-        // Frontend currently uploads at most one per field; keep the first
         const file = filesArray[0];
         const uploadedUrl = await uploadToSupabase(file, title);
-
-        documentsObject[fieldName] = normalizeFile(file, uploadedUrl);
-
-        // legacy array
-        documentArray.push({
-          name: file.originalname,
-          originalName: file.originalname,
-          mimeType: file.mimetype,
-          size: file.size,
-          type: file.mimetype,
-          url: uploadedUrl,
-          label: labelMapping[fieldName] || "Other",
-        });
-      }
-
-      // If unknown additional fields are sent, still upload them and keep in legacy array
-      for (const [fieldName, filesArray] of Object.entries(req.files)) {
-        if (documentFields.includes(fieldName)) continue;
-        for (const file of filesArray) {
-          const uploadedUrl = await uploadToSupabase(file, title);
-          documentArray.push({
-            name: file.originalname,
-            originalName: file.originalname,
-            mimeType: file.mimetype,
-            size: file.size,
-            type: file.mimetype,
-            url: uploadedUrl,
-            label: labelMapping[fieldName] || "Other",
-          });
-        }
+        documents.push(normalizeDoc(file, uploadedUrl, fieldName));
       }
     }
 
@@ -210,12 +185,7 @@ export const createTender = async (req, res) => {
 
       status: effectiveStatus,
 
-      // New response contract expects a normalized documents object.
-      // Keep legacy array in `_legacy` for older clients.
-      documents:
-        documentArray.length > 0
-          ? { ...documentsObject, _legacy: documentArray }
-          : documentsObject,
+      documents,
 
       createdBy: req.user._id,
       organization: req.user.organizationId || null, // Set organization if user belongs to one
@@ -443,52 +413,49 @@ export const updateTender = async (req, res) => {
       }
     }
 
-    // Documents: align with createTender normalized object + legacy array in _legacy
+    // Documents: new standardized tender documents array
     const documentFields = [
-      "bidFileDocuments",
-      "compiledDocuments",
-      "financialDocuments",
-      "technicalProposal",
-      "proofOfExperience",
+      "termsOfReference",
+      "sbd1",
+      "sbd2",
+      "sbd4DeclarationOfInterest",
+      "sbd61",
+      "bidTechnicalSubmissionTemplate",
+      "bidFinancialSubmissionTemplate",
+      "annexure1",
+      "annexure2",
+      "annexure3",
     ];
 
-    const normalizeFile = (file, url) => ({
+    const labelMapping = {
+      termsOfReference: "Terms of Reference Document",
+      sbd1: "SBD 1",
+      sbd2: "SBD 2",
+      sbd4DeclarationOfInterest: "SBD 4 Declaration of interest",
+      sbd61: "SBD 6.1",
+      bidTechnicalSubmissionTemplate: "Bid Technical Submission Template",
+      bidFinancialSubmissionTemplate: "Bid Financial Submission Template",
+      annexure1: "Annexure 1",
+      annexure2: "Annexure 2",
+      annexure3: "Annexure 3",
+    };
+
+    const normalizeDoc = (file, url, fieldName) => ({
+      label: labelMapping[fieldName],
       url,
       originalName: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
     });
 
-    const labelMapping = {
-      bidFileDocuments: "Bid File Documents",
-      compiledDocuments: "Compiled Documents",
-      financialDocuments: "Financial Documents",
-      technicalProposal: "Technical Proposal",
-      proofOfExperience: "Proof of Experience (Reference Letter)",
-    };
+    // Current tender.documents is expected to be an array; if not, coerce to []
+    const currentDocuments = Array.isArray(tender.documents)
+      ? tender.documents
+      : [];
 
-    // Current tender.documents can be either the new object format or legacy array.
-    const currentDocuments = tender.documents;
-    const currentNormalizedObject =
-      currentDocuments && !Array.isArray(currentDocuments)
-        ? currentDocuments
-        : {
-            bidFileDocuments: null,
-            compiledDocuments: null,
-            financialDocuments: null,
-            technicalProposal: null,
-            proofOfExperience: null,
-          };
-
-    const currentLegacyArray = Array.isArray(currentDocuments)
-      ? currentDocuments
-      : Array.isArray(currentDocuments?._legacy)
-        ? currentDocuments._legacy
-        : [];
-
-    // Decide which existing docs to keep based on req.body.existingDocuments
-    // Accepts array of URLs or object map of field->url.
-    // If omitted: keep existing
+    // existingDocuments: optional list of URLs to keep.
+    // If omitted => keep all existing.
+    // If provided => keep only those URLs.
     let keepUrls = null;
     if (req.body.existingDocuments !== undefined) {
       try {
@@ -496,133 +463,47 @@ export const updateTender = async (req, res) => {
           typeof req.body.existingDocuments === "string"
             ? JSON.parse(req.body.existingDocuments)
             : req.body.existingDocuments;
-
-        if (Array.isArray(parsed)) {
-          keepUrls = parsed.filter((u) => typeof u === "string");
-        } else if (parsed && typeof parsed === "object") {
-          keepUrls = Object.values(parsed).filter(
-            (u) => u && typeof u === "string"
-          );
-        } else {
-          keepUrls = [];
-        }
+        keepUrls = Array.isArray(parsed)
+          ? parsed.filter((u) => typeof u === "string")
+          : [];
       } catch {
-        keepUrls = null; // fall back to keep all
+        keepUrls = null;
       }
     }
 
-    const shouldKeepUrl = (url) => {
-      if (!url) return false;
+    const shouldKeep = (doc) => {
+      if (!doc?.url) return false;
       if (keepUrls === null) return true;
-      return keepUrls.includes(url);
+      return keepUrls.includes(doc.url);
     };
 
-    // Build kept normalized object by filtering urls
-    const keptDocumentsObject = {
-      bidFileDocuments:
-        currentNormalizedObject.bidFileDocuments &&
-        shouldKeepUrl(currentNormalizedObject.bidFileDocuments.url)
-          ? currentNormalizedObject.bidFileDocuments
-          : null,
-      compiledDocuments:
-        currentNormalizedObject.compiledDocuments &&
-        shouldKeepUrl(currentNormalizedObject.compiledDocuments.url)
-          ? currentNormalizedObject.compiledDocuments
-          : null,
-      financialDocuments:
-        currentNormalizedObject.financialDocuments &&
-        shouldKeepUrl(currentNormalizedObject.financialDocuments.url)
-          ? currentNormalizedObject.financialDocuments
-          : null,
-      technicalProposal:
-        currentNormalizedObject.technicalProposal &&
-        shouldKeepUrl(currentNormalizedObject.technicalProposal.url)
-          ? currentNormalizedObject.technicalProposal
-          : null,
-      proofOfExperience:
-        currentNormalizedObject.proofOfExperience &&
-        shouldKeepUrl(currentNormalizedObject.proofOfExperience.url)
-          ? currentNormalizedObject.proofOfExperience
-          : null,
-    };
+    // Keep docs requested
+    const keptDocuments = currentDocuments.filter(shouldKeep);
 
-    const keptLegacyArray = currentLegacyArray.filter((d) =>
-      shouldKeepUrl(d?.url)
-    );
-
-    // Upload new docs
-    const uploadedNormalized = {
-      bidFileDocuments: null,
-      compiledDocuments: null,
-      financialDocuments: null,
-      technicalProposal: null,
-      proofOfExperience: null,
-    };
-
-    let uploadedLegacyArray = [];
-
+    // Upload new docs and replace by label (stable identifier)
     const uploadFolder = tender.title || title || "tender";
+    const uploadedDocs = [];
 
     if (req.files && Object.keys(req.files).length > 0) {
-      // Known typed fields: store both normalized object + legacy array
       for (const fieldName of documentFields) {
         const filesArray = req.files[fieldName];
         if (!filesArray || filesArray.length === 0) continue;
 
         const file = filesArray[0];
         const uploadedUrl = await uploadToSupabase(file, uploadFolder);
-
-        uploadedNormalized[fieldName] = normalizeFile(file, uploadedUrl);
-
-        uploadedLegacyArray.push({
-          name: file.originalname,
-          originalName: file.originalname,
-          mimeType: file.mimetype,
-          size: file.size,
-          type: file.mimetype,
-          url: uploadedUrl,
-          label: labelMapping[fieldName] || "Other",
-        });
-      }
-
-      // Unknown extra fields: still upload and store in legacy array
-      for (const [fieldName, filesArray] of Object.entries(req.files)) {
-        if (documentFields.includes(fieldName)) continue;
-        for (const file of filesArray) {
-          const uploadedUrl = await uploadToSupabase(file, uploadFolder);
-          uploadedLegacyArray.push({
-            name: file.originalname,
-            originalName: file.originalname,
-            mimeType: file.mimetype,
-            size: file.size,
-            type: file.mimetype,
-            url: uploadedUrl,
-            label: labelMapping[fieldName] || "Other",
-          });
-        }
+        uploadedDocs.push(normalizeDoc(file, uploadedUrl, fieldName));
       }
     }
 
-    // Merge documents: new uploads replace typed fields; legacy arrays are concatenated
-    const mergedDocumentsObject = {
-      bidFileDocuments:
-        uploadedNormalized.bidFileDocuments ?? keptDocumentsObject.bidFileDocuments,
-      compiledDocuments:
-        uploadedNormalized.compiledDocuments ?? keptDocumentsObject.compiledDocuments,
-      financialDocuments:
-        uploadedNormalized.financialDocuments ?? keptDocumentsObject.financialDocuments,
-      technicalProposal:
-        uploadedNormalized.technicalProposal ?? keptDocumentsObject.technicalProposal,
-      proofOfExperience:
-        uploadedNormalized.proofOfExperience ?? keptDocumentsObject.proofOfExperience,
-    };
+    const byLabel = new Map();
+    for (const doc of keptDocuments) {
+      if (doc?.label) byLabel.set(doc.label, doc);
+    }
+    for (const doc of uploadedDocs) {
+      byLabel.set(doc.label, doc);
+    }
 
-    const mergedLegacyArray = [...keptLegacyArray, ...uploadedLegacyArray];
-
-    tender.documents =
-      mergedLegacyArray.length > 0
-        ? { ...mergedDocumentsObject, _legacy: mergedLegacyArray }
-        : mergedDocumentsObject;
+    tender.documents = Array.from(byLabel.values());
 
     const updatedTender = await tender.save();
 
