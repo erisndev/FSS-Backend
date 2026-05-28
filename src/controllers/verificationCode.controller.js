@@ -44,22 +44,7 @@ export const requestVerificationCode = async (req, res) => {
       });
     }
 
-    // Check if user already has a pending request for this tender
-    const existingRequest = await VerificationCodeRequest.findOne({
-      tender: tenderId,
-      requestedBy: req.user._id,
-      status: "pending",
-    });
-
-    if (existingRequest) {
-      return res.status(400).json({
-        message:
-          "You already have a pending verification code request for this tender",
-      });
-    }
-
-    // Check if user already has an approved request that hasn't been used
-    // Allow re-requesting if code was used but application wasn't submitted
+    // If user already has an approved request that hasn't been used, don't generate a new code
     const approvedRequest = await VerificationCodeRequest.findOne({
       tender: tenderId,
       requestedBy: req.user._id,
@@ -70,64 +55,50 @@ export const requestVerificationCode = async (req, res) => {
     if (approvedRequest) {
       return res.status(400).json({
         message:
-          "You already have an approved verification code. Please check your email.",
+          "You already have a verification code. Please check your email and apply.",
         hasApprovedCode: true,
       });
     }
 
-    // Create new verification code request
+    // Generate a unique per-request verification code (not tied to the tender)
+    const verificationCode = crypto
+      .randomBytes(4)
+      .toString("hex")
+      .toUpperCase();
+
+    // Create new verification code request as auto-approved
     const codeRequest = await VerificationCodeRequest.create({
       tender: tenderId,
       requestedBy: req.user._id,
       message:
         message ||
         `Request for verification code to apply for tender: ${tender.title}`,
+      status: "approved",
+      approvalDate: new Date(),
+      code: verificationCode,
     });
 
-    // Send email notification to tender creator
+    // Send email with verification code directly to bidder (no approval flow)
     try {
-      await sendVerificationCodeRequestEmail(
-        tender.createdBy,
-        tender,
-        req.user,
-        message
-      );
+      await sendVerificationCodeEmail(req.user, tender.title, verificationCode);
     } catch (emailError) {
-      console.error("Error sending email to tender creator:", emailError);
-      // Continue even if email fails
+      console.error("Error sending verification code email:", emailError);
     }
 
-    // Create notification for tender creator
+    // Notify bidder in-app
     await Notification.create({
-      user: tender.createdBy._id,
+      user: req.user._id,
       type: "tender",
-      title: "Verification Code Request",
-      body: `${req.user.name} from ${req.user.companyName} has requested a verification code for tender "${tender.title}"`,
+      title: "Verification Code Generated",
+      body: `A verification code for tender "${tender.title}" has been sent to your email.`,
       meta: {
         tenderId,
         requestId: codeRequest._id,
-        requestType: "verificationCode",
       },
     });
 
-    // Also notify admins
-    const admins = await User.find({ role: "admin" });
-    for (const admin of admins) {
-      await Notification.create({
-        user: admin._id,
-        type: "tender",
-        title: "Verification Code Request",
-        body: `${req.user.name}from ${req.user.companyName} has requested a verification code for tender "${tender.title}"`,
-        meta: {
-          tenderId,
-          requestId: codeRequest._id,
-          requestType: "verificationCode",
-        },
-      });
-    }
-
     res.status(201).json({
-      message: "Verification code request submitted successfully",
+      message: "Verification code generated and sent successfully",
       request: codeRequest,
     });
   } catch (err) {
@@ -273,15 +244,6 @@ export const approveVerificationCodeRequest = async (req, res) => {
             "Forbidden: You can only manage verification requests for your own tenders",
         });
       }
-    }
-
-    // Generate verification code if it doesn't exist
-    if (!tender.verificationCode) {
-      tender.verificationCode = crypto
-        .randomBytes(4)
-        .toString("hex")
-        .toUpperCase();
-      await tender.save();
     }
 
     // Update request status
@@ -515,8 +477,16 @@ export const verifyCode = async (req, res) => {
       return res.status(400).json({ message: "Tender is not active" });
     }
 
-    // Check if the code matches
-    if (tender.verificationCode !== verificationCode.toUpperCase()) {
+    // Check if there is an approved request with this code for this user
+    const approvedRequest = await VerificationCodeRequest.findOne({
+      tender: tenderId,
+      requestedBy: req.user._id,
+      status: "approved",
+      code: verificationCode.toUpperCase(),
+      codeUsed: false,
+    });
+
+    if (!approvedRequest) {
       return res.status(400).json({ message: "Invalid verification code" });
     }
 
@@ -536,25 +506,9 @@ export const verifyCode = async (req, res) => {
       });
     }
 
-    // Check if user has an approved request for this tender (remove codeUsed: false condition)
-    const approvedRequest = await VerificationCodeRequest.findOne({
-      tender: tenderId,
-      requestedBy: req.user._id,
-      status: "approved",
-    });
-
-    if (!approvedRequest) {
-      return res.status(400).json({
-        message:
-          "You don't have an approved verification code request for this tender",
-      });
-    }
-
-    // Mark the code as used only if not already used
-    if (!approvedRequest.codeUsed) {
-      approvedRequest.codeUsed = true;
-      await approvedRequest.save();
-    }
+    // Mark code as used
+    approvedRequest.codeUsed = true;
+    await approvedRequest.save();
 
     res.json({
       message:
@@ -625,24 +579,6 @@ export const checkVerificationStatus = async (req, res) => {
       });
     }
 
-    // Check if user has a verified (code used) request for this tender
-    const verifiedRequest = await VerificationCodeRequest.findOne({
-      tender: tenderId,
-      requestedBy: req.user._id,
-      status: "approved",
-      codeUsed: true,
-    });
-
-    if (verifiedRequest) {
-      // User has already verified the code, can proceed directly to application
-      return res.json({
-        isVerified: true,
-        hasApplied: false,
-        message:
-          "Code already verified. You can proceed with your application.",
-      });
-    }
-
     // Check if user has an approved but unused code
     const approvedRequest = await VerificationCodeRequest.findOne({
       tender: tenderId,
@@ -656,27 +592,11 @@ export const checkVerificationStatus = async (req, res) => {
         isVerified: false,
         hasApplied: false,
         hasApprovedCode: true,
-        message: "You have an approved code. Please enter it to proceed.",
+        message: "A verification code was generated and emailed to you. Please enter it to proceed.",
       });
     }
 
-    // Check if user has a pending request
-    const pendingRequest = await VerificationCodeRequest.findOne({
-      tender: tenderId,
-      requestedBy: req.user._id,
-      status: "pending",
-    });
-
-    if (pendingRequest) {
-      return res.json({
-        isVerified: false,
-        hasApplied: false,
-        hasPendingRequest: true,
-        message: "Your verification code request is pending approval.",
-      });
-    }
-
-    // No request exists
+    // No unused code exists
     return res.json({
       isVerified: false,
       hasApplied: false,

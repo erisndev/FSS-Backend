@@ -40,7 +40,7 @@ export const applyToTender = async (req, res) => {
 
     // Check if tender requires verification code
     if (tender.verificationCode) {
-      // Check if user has a verified code request for this tender
+      // User must have verified a generated code before applying
       const verifiedRequest = await VerificationCodeRequest.findOne({
         tender: tenderId,
         requestedBy: req.user._id,
@@ -49,9 +49,10 @@ export const applyToTender = async (req, res) => {
       });
 
       if (!verifiedRequest) {
-        return res.status(403).json({ 
-          message: "Verification code required. Please request and verify the code before applying.",
-          requiresVerification: true 
+        return res.status(403).json({
+          message:
+            "Verification code required. Please request a code and verify it before applying.",
+          requiresVerification: true,
         });
       }
     }

@@ -35,6 +35,12 @@ const verificationCodeRequestSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    code: {
+      type: String,
+      required: true,
+      uppercase: true,
+      trim: true,
+    },
   },
   { timestamps: true }
 );
